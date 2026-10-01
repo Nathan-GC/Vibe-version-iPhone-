@@ -1,0 +1,36 @@
+# Flutter/Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+*.g.dart
+*.freezed.dart
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Platform (générés par `flutter create .`)
+android/
+# Exception : code natif des plugins locaux (packages/*/android), qui doit
+# être versionné — seul le dossier android/ de l'app reste exclu.
+!packages/*/android/
+# Vibe iPhone : le dossier ios/ est configuré à la main (Info.plist, Podfile,
+# AppDelegate.swift...) et DOIT être versionné — ses fichiers générés
+# (Pods/, Flutter/ephemeral/, Generated.xcconfig...) restent exclus par
+# ios/.gitignore.
+web/
+macos/
+linux/
+windows/
+
+# Local
+*.log
+.DS_Store
+
+# graphify (graphe de connaissances local, régénérable)
+graphify-out/

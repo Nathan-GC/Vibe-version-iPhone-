@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Vibe Player (iOS) — voir docs/PARTIES.md, Partie 1 « Socle & Plateforme ». -->
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Vibe</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Vibe</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+
+	<!-- Lecture en arrière-plan / écran verrouillé (just_audio + audio_service,
+	     équivalent du service de premier plan Android) et tâche périodique de
+	     purge des orphelins (workmanager -> BGAppRefreshTask, mode "fetch"). -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>fetch</string>
+	</array>
+	<!-- Identifiant de la tâche workmanager : doit rester identique à
+	     `orphanPurgeTaskName` (lib/core/purge/purge_background_scheduler.dart)
+	     et à celui enregistré dans AppDelegate.swift. -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>orphan_purge_daily_check</string>
+	</array>
+
+	<!-- Bibliothèque locale : le dossier Documents de l'app est exposé dans
+	     l'app Fichiers (« Sur mon iPhone > Vibe ») et dans le Finder (partage de
+	     fichiers). L'utilisateur y dépose ses MP3/M4A/FLAC, indexés par le scan
+	     de la Bibliothèque ; les exports JSON de playlists y sont aussi visibles. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+
+	<!-- image_picker (pochettes, fonds de Vibe image/vidéo). La galerie passe par
+	     PHPicker, sans demande d'autorisation ; les clés caméra/micro sont exigées
+	     par l'App Store dès que le plugin est lié, même si l'app ne s'en sert pas. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Vibe accède à tes photos et vidéos pour personnaliser le fond d'une Vibe, la pochette d'une playlist ou celle d'un morceau.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Vibe peut utiliser l'appareil photo pour créer une pochette ou un fond de Vibe.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Vibe peut utiliser le micro lors de l'enregistrement d'une vidéo de fond de Vibe.</string>
+
+	<!-- Réseau : HTTPS uniquement (iTunes, MusicBrainz, Cover Art Archive, pochettes) — chiffrement exempté. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+
+	<!-- Masquage de la barre d'état en mode Focus (SystemChrome.setEnabledSystemUIMode). -->
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
+
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneClassName</key>
+					<string>UIWindowScene</string>
+					<key>UISceneConfigurationName</key>
+					<string>flutter</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+					<key>UISceneStoryboardFile</key>
+					<string>Main</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+</dict>
+</plist>

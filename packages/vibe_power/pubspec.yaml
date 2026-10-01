@@ -1,0 +1,23 @@
+name: vibe_power
+description: Plugin local de Vibe Player — maintien de l'écran allumé (Android FLAG_KEEP_SCREEN_ON, iOS isIdleTimerDisabled) et état du mode économie d'énergie (Android PowerManager, iOS Low Power Mode).
+publish_to: "none"
+version: 1.0.0
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.3.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.example.vibe_power
+        pluginClass: VibePowerPlugin
+      # Implémentation Swift (packages/vibe_power/ios) : CocoaPods via
+      # vibe_power.podspec, Swift Package Manager via vibe_power/Package.swift.
+      ios:
+        pluginClass: VibePowerPlugin

@@ -1,0 +1,122 @@
+name: playlist_app
+description: Lecteur de musique local-first, entièrement personnalisable.
+publish_to: "none"
+version: 1.3.1+8
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management
+  flutter_riverpod: ^3.4.3
+  riverpod_annotation: ^4.0.7
+
+  # Navigation
+  go_router: ^18.0.1
+
+  # Persistence (local DB pour playlists / tracks / versioning)
+  drift: ^2.19.1
+  drift_flutter: ^0.3.1
+  path_provider: ^2.1.3
+  path: ^1.9.0
+
+  # Moteur audio natif
+  just_audio: ^0.10.6
+  audio_service: ^0.18.15
+  audio_session: ^0.2.4
+
+  # Détection de silence (filtre `silencedetect`, core/storage/silence_trimmer) et
+  # lecture des tags ID3 via ffprobe (core/storage/metadata_extractor) — remplace
+  # flutter_media_metadata, abandonné (build.gradle incompatible AGP 9+/Gradle 9+).
+  # Variante "min" : LGPL 3.0, sans composant GPL (la variante complète rendait
+  # l'APK distribué GPL v3) — FFprobe et `silencedetect` y sont inclus.
+  ffmpeg_kit_flutter_new_min: ^3.6.2
+
+  # Accès stockage local & permissions (/Music/AppFolder)
+  permission_handler: ^13.0.2
+  file_picker: ^12.3.0
+  disk_space_plus: ^0.2.3
+
+  # Réseau (Discovery API, Spotify link ingestion)
+  dio: ^5.6.0
+
+  # Hash de fichier pour le cache incrémental du scan plein-appareil (Étape 8)
+  crypto: ^3.0.6
+
+  # Préférences légères (dernier état de lecture, réglages UI)
+  shared_preferences: ^2.2.3
+
+  # Étape 7 : purge mensuelle des orphelins — tâche planifiée en arrière-plan
+  # + notification locale. NB : nécessite le wiring natif décrit après
+  # `flutter create .` (permission POST_NOTIFICATIONS Android 13+, background
+  # modes iOS) — non générable depuis ce scaffold sans SDK Flutter installé.
+  workmanager: ^0.10.10
+  flutter_local_notifications: ^22.3.0
+
+  # Polish visuel
+  shimmer: ^4.0.0
+
+  # Design System : typographie Outfit (charte graphique, voir
+  # core/theme/design_system/)
+  google_fonts: ^6.2.1
+
+  # Vibe Engine : import d'images locales pour les fonds de playlist personnalisés
+  image_picker: ^1.1.2
+
+  # Fond Fluid audio-réactif du Player : palette dominante extraite de la pochette
+  palette_generator: ^0.3.3+7
+
+  # Vibe Engine : vidéo de fond personnalisée jouée en boucle (Section 4.3)
+  video_player: ^2.9.2
+
+  open_filex: ^4.7.0
+
+  # Mode Focus : écran maintenu allumé (FLAG_KEEP_SCREEN_ON), sauf en mode
+  # économie d'énergie — plugin local versionné dans le dépôt (le dossier
+  # android/ est gitignoré), sans dépendance Maven supplémentaire. Voir
+  # core/system/focus_keep_screen_on.dart.
+  vibe_power:
+    path: packages/vibe_power
+
+  # Identifiants Spotify Developer chiffrés (Keystore Android, trousseau iOS), voir
+  # core/networking/spotify/spotify_credentials.dart.
+  flutter_secure_storage: ^11.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+  # Codegen
+  build_runner: ^2.4.11
+  riverpod_generator: ^4.0.9
+  riverpod_lint: ^3.1.9
+  drift_dev: ^2.19.1
+
+flutter:
+  uses-material-design: true
+
+  # Vibe Neon : photo de fond de skyline cyberpunk (cyberpunk_city_1.png,
+  # voir FluidBackground/kCyberpunkCityImage) sous le shader vitre/pluie.
+  # Dossier déclaré même vide : `flutter pub get`/build acceptent un
+  # répertoire sans fichiers, et FluidBackground se replie sur un aplat
+  # nocturne tant qu'aucune image n'y est déposée (voir son `errorBuilder`).
+  assets:
+    - assets/images/
+    # Police Outfit (SIL OFL 1.1, licence dans OFL.txt) — chargée localement
+    # par google_fonts, téléchargement au lancement désactivé (main.dart).
+    - assets/fonts/
+
+  # Vibe Engine : particules audio-réactives (GLSL) superposées à FluidBackground.
+  shaders:
+    - assets/shaders/vibe_particles.frag
+    # Nébuleuse FBM du preset Space (voir FluidBackground._paintNebula).
+    - assets/shaders/space_nebula.frag
+
+  # fonts:
+  #   - family: AppFont
+  #     fonts:
+  #       - asset: assets/fonts/AppFont-Regular.ttf
