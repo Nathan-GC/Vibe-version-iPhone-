@@ -2,6 +2,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../../core/platform/app_platform.dart';
+import '../../../core/purge/local_notification_service.dart';
+import '../../../core/purge/purge_providers.dart';
 import '../../../core/shared/onboarding_storage.dart';
 import '../../../core/shared/permission_retry.dart';
 import '../../../core/storage/database/database_provider.dart';
@@ -20,6 +22,44 @@ final Provider<OnboardingStorage> onboardingStorageProvider = Provider<Onboardin
   return OnboardingStorage();
 });
 
+/// Seules demandes d'autorisation système de l'app (étapes 2 et 3 de
+/// l'onboarding), faites une fois, après l'acceptation des conditions — les
+/// lancements suivants ne redemandent rien (voir app/app.dart).
+class OnboardingPermissions {
+  OnboardingPermissions(this._notifications);
+
+  final LocalNotificationService _notifications;
+
+  /// Étape 2 : autorisation des notifications, puis initialisation du service
+  /// de notifications locales, qui câble [onTap] (rappel de nettoyage de la
+  /// bibliothèque).
+  ///
+  /// iOS : demandée par l'initialisation elle-même (voir
+  /// LocalNotificationService) — permission_handler n'y gère pas les
+  /// notifications.
+  Future<void> requestNotifications({required void Function() onTap}) async {
+    if (AppPlatform.isIOS) return _notifications.initialize(onNotificationTap: onTap, requestIOSPermission: true);
+    await requestPermissionWithRetry(Permission.notification);
+    await _notifications.initialize(onNotificationTap: onTap);
+  }
+
+  /// Étape 3 : accès aux fichiers audio (READ_MEDIA_AUDIO) ; `true` si accordé.
+  ///
+  /// iOS : aucune autorisation à demander — le scan porte sur le dossier
+  /// Documents de l'app (voir DeviceRootResolver), toujours lisible par
+  /// elle ; `Permission.audio` (READ_MEDIA_AUDIO) n'a pas d'équivalent iOS
+  /// et y serait systématiquement refusée.
+  Future<bool> requestAudio() async {
+    if (AppPlatform.isIOS) return true;
+    await requestPermissionWithRetry(Permission.audio);
+    return (await Permission.audio.status).isGranted;
+  }
+}
+
+final Provider<OnboardingPermissions> onboardingPermissionsProvider = Provider<OnboardingPermissions>((ref) {
+  return OnboardingPermissions(ref.read(localNotificationServiceProvider));
+});
+
 /// État de l'écran d'onboarding (Étape 8) : indexation plein-appareil du
 /// premier lancement, exposée pour la barre de progression.
 class OnboardingScanState {
@@ -27,7 +67,6 @@ class OnboardingScanState {
     this.phase = FullDeviceScanPhase.listingFiles,
     this.processed = 0,
     this.total = 0,
-    this.permissionDenied = false,
     this.skippedIncompleteDownloads = 0,
     this.isEnriching = false,
     this.enrichmentProcessed = 0,
@@ -37,7 +76,6 @@ class OnboardingScanState {
   final FullDeviceScanPhase phase;
   final int processed;
   final int total;
-  final bool permissionDenied;
   final int skippedIncompleteDownloads;
   // Phase 2 (après le renommage/import complet, voir OnboardingScanController
   // .start) : enrichissement iTunes des seuls morceaux renommés depuis leur
@@ -52,7 +90,6 @@ class OnboardingScanState {
     FullDeviceScanPhase? phase,
     int? processed,
     int? total,
-    bool? permissionDenied,
     int? skippedIncompleteDownloads,
     bool? isEnriching,
     int? enrichmentProcessed,
@@ -62,7 +99,6 @@ class OnboardingScanState {
       phase: phase ?? this.phase,
       processed: processed ?? this.processed,
       total: total ?? this.total,
-      permissionDenied: permissionDenied ?? this.permissionDenied,
       skippedIncompleteDownloads: skippedIncompleteDownloads ?? this.skippedIncompleteDownloads,
       isEnriching: isEnriching ?? this.isEnriching,
       enrichmentProcessed: enrichmentProcessed ?? this.enrichmentProcessed,
@@ -75,32 +111,18 @@ class OnboardingScanController extends Notifier<OnboardingScanState> {
   @override
   OnboardingScanState build() => const OnboardingScanState();
 
-  /// Demande la permission audio, lance le scan plein-appareil (isolates
-  /// séparés pour le hachage — voir FullDeviceScanService), persiste chaque
-  /// morceau trouvé (phase 1 : renommage/import — un seul passage par
-  /// fichier, [FullDeviceScanService]/[LibraryScanService] ne bouclent ni ne
-  /// retentent), puis enrichit via iTunes exclusivement (voir "Recadrage du
-  /// Workflow d'Enrichissement" — jamais de choix de source ni de question
-  /// posée au premier scan) les seuls morceaux renommés depuis leur nom de
-  /// fichier (phase 2, jamais entrelacée avec la phase 1 — tout le renommage
-  /// est déjà en base avant qu'un seul appel réseau d'enrichissement ne
-  /// parte), avant de marquer l'onboarding comme terminé.
-  ///
-  /// iOS : aucune autorisation à demander — le scan porte sur le dossier
-  /// Documents de l'app (voir DeviceRootResolver), toujours lisible par
-  /// elle ; `Permission.audio` (READ_MEDIA_AUDIO) n'a pas d'équivalent iOS
-  /// et y serait systématiquement refusée.
+  /// Lancé par OnboardingScreen seulement après l'accès audio accordé, l'import
+  /// accepté et le choix d'enrichissement enregistré (étapes 3 à 5) : scan
+  /// plein-appareil (isolates séparés pour le hachage — voir
+  /// FullDeviceScanService), persistance de chaque morceau trouvé (phase 1 :
+  /// renommage/import — un seul passage par fichier,
+  /// [FullDeviceScanService]/[LibraryScanService] ne bouclent ni ne
+  /// retentent), puis, si ce choix l'autorise, enrichissement automatique
+  /// (jamais de choix de source) des seuls morceaux renommés depuis leur nom
+  /// de fichier (phase 2, jamais entrelacée avec la phase 1 — tout le
+  /// renommage est déjà en base avant qu'un seul appel réseau
+  /// d'enrichissement ne parte), avant de marquer l'onboarding comme terminé.
   Future<void> start() async {
-    if (!AppPlatform.isIOS) {
-      await requestPermissionWithRetry(Permission.audio);
-      final PermissionStatus status = await Permission.audio.status;
-      if (!status.isGranted) {
-        state = state.copyWith(permissionDenied: true, phase: FullDeviceScanPhase.done);
-        await ref.read(onboardingStorageProvider).markCompleted();
-        return;
-      }
-    }
-
     final TrackRepository repository = TrackRepository(ref.read(appDatabaseProvider));
     final FullDeviceScanService scanService = ref.read(fullDeviceScanServiceProvider);
 

@@ -81,6 +81,7 @@ void main() {
 
   setUp(() {
     fake = _ControlledSync();
+    SharedPreferences.setMockInitialValues({});
     container = ProviderContainer(overrides: [documentsLibrarySyncProvider.overrideWithValue(fake)]);
   });
 
@@ -137,5 +138,17 @@ void main() {
     expect(await controller().sync(automatic: true), isNull);
     expect(await controller().sync(), isNotNull);
     expect(fake.runs, 2);
+  });
+
+  test('iOS: once import was refused at onboarding, only the Library button syncs', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    fake.release.complete();
+
+    await DocumentsSyncController.disableAutomaticSync();
+
+    expect(await controller().sync(automatic: true), isNull, reason: 'ni au lancement ni au retour au premier plan');
+    expect(fake.runs, 0);
+    expect(await controller().sync(), isNotNull);
+    expect(fake.runs, 1);
   });
 }

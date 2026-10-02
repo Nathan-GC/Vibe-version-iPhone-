@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/platform/app_platform.dart';
 import '../../../core/storage/database/track_auto_enricher.dart';
@@ -44,6 +45,12 @@ Future<bool> enrichSyncedTrack(TrackAutoEnricher enricher, ScannedTrack track) a
 /// tourne est ignoré.
 class DocumentsSyncController extends Notifier<DocumentsSyncState> {
   static const Duration automaticInterval = Duration(seconds: 30);
+  static const String _automaticSyncKey = 'library.documents_auto_sync';
+
+  /// Refus de l'import à l'onboarding (étape 4) : plus aucun déclenchement
+  /// automatique, seul le bouton de la Bibliothèque synchronise.
+  static Future<void> disableAutomaticSync() async =>
+      (await SharedPreferences.getInstance()).setBool(_automaticSyncKey, false);
 
   DateTime? _lastAutomaticRun;
 
@@ -51,8 +58,11 @@ class DocumentsSyncController extends Notifier<DocumentsSyncState> {
   DocumentsSyncState build() => const DocumentsSyncState();
 
   /// `null` si rien n'a été lancé (plateforme non iOS, synchronisation déjà
-  /// en cours, ou déclenchement automatique trop rapproché).
+  /// en cours, déclenchement automatique désactivé ou trop rapproché).
   Future<DocumentsSyncResult?> sync({bool automatic = false}) async {
+    // Lu avant les gardes ci-dessous : plus aucun `await` entre elles et le
+    // passage à `isRunning`, sans quoi deux synchronisations pourraient partir.
+    if (automatic && !((await SharedPreferences.getInstance()).getBool(_automaticSyncKey) ?? true)) return null;
     if (!AppPlatform.isIOS || state.isRunning) return null;
     final DateTime now = DateTime.now();
     if (automatic) {

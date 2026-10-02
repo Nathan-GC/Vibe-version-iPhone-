@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
 import 'package:path_provider/path_provider.dart' show getApplicationSupportDirectory;
+import 'package:sqlite3/common.dart' show CommonDatabase;
 
 import '../../platform/app_platform.dart';
 import '../../theme/vibe_engine/vibe_engine.dart';
@@ -375,6 +376,12 @@ class AppDatabase extends _$AppDatabase {
         },
       );
 
+  /// Chaque connexion attend (jusqu'à 5 s) le verrou tenu par l'autre au
+  /// lieu d'échouer aussitôt sur "database is locked" (délai SQLite par
+  /// défaut : 0) — l'app et la tâche de purge d'arrière-plan (WorkManager,
+  /// isolate séparé) ouvrent chacune la leur sur le même fichier.
+  static void configureConnection(CommonDatabase database) => database.execute('PRAGMA busy_timeout = 5000');
+
   /// Android : emplacement par défaut de drift_flutter (inchangé).
   /// iOS : `Library/Application Support` plutôt que le dossier Documents
   /// (défaut de drift_flutter), exposé dans l'app Fichiers
@@ -383,6 +390,9 @@ class AppDatabase extends _$AppDatabase {
   /// avec l'appareil et conservé lors des mises à jour.
   static QueryExecutor _openConnection() => driftDatabase(
         name: 'playlist_app',
-        native: AppPlatform.isIOS ? const DriftNativeOptions(databaseDirectory: getApplicationSupportDirectory) : null,
+        native: DriftNativeOptions(
+          databaseDirectory: AppPlatform.isIOS ? getApplicationSupportDirectory : null,
+          setup: configureConnection,
+        ),
       );
 }

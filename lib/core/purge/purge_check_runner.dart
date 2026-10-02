@@ -15,8 +15,14 @@ class PurgeCheckRunner {
 
   static const Duration checkInterval = Duration(days: 30);
 
-  Future<List<OrphanTrack>> runIfDue() async {
+  /// [inBackground] : tâche WorkManager, qui laisse toujours le premier
+  /// contrôle à l'app (au lancement, voir purgeCheckOnLaunchProvider) — c'est
+  /// l'app qui crée la base au premier lancement. Deux connexions la créant en
+  /// même temps faisaient échouer celle de l'app ("database is locked" sur
+  /// CREATE TABLE, import perdu — recette 1.3.2+9).
+  Future<List<OrphanTrack>> runIfDue({bool inBackground = false}) async {
     final DateTime? lastCheck = await _storage.loadLastCheck();
+    if (lastCheck == null && inBackground) return const [];
     final DateTime now = DateTime.now();
     if (lastCheck != null && now.difference(lastCheck) < checkInterval) {
       return const [];

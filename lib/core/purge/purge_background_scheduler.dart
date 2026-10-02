@@ -22,7 +22,7 @@ void purgeCallbackDispatcher() {
     await notifications.initialize();
 
     final PurgeCheckRunner runner = PurgeCheckRunner(PurgeCheckStorage(), OrphanDetectorService(db), notifications);
-    await runner.runIfDue();
+    await runner.runIfDue(inBackground: true);
 
     await db.close();
     return true;

@@ -18,7 +18,7 @@ class MusicBrainzClient {
 
   final Dio _dio;
 
-  static const String userAgent = 'Vibe/1.3.1 ( ${AppConstants.contactEmail} )';
+  static const String userAgent = 'Vibe/1.3.3 ( ${AppConstants.contactEmail} )';
   static const Duration minInterval = Duration(milliseconds: 1100);
   static const int resultLimit = 5;
 

@@ -1,8 +1,4 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:permission_handler/permission_handler.dart';
-
-import '../platform/app_platform.dart';
-import '../shared/permission_retry.dart';
 
 /// Notification locale "Storage Cleanup" (Étape 7.2). Le callback de tap
 /// n'est câblé que côté app au premier plan (un isolate d'arrière-plan n'a
@@ -10,20 +6,23 @@ import '../shared/permission_retry.dart';
 class LocalNotificationService {
   final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
 
-  Future<void> initialize({void Function()? onNotificationTap}) async {
-    // iOS : l'autorisation (alerte, badge, son) est demandée par
-    // flutter_local_notifications lui-même à l'initialisation, via
-    // `DarwinInitializationSettings` ci-dessous — permission_handler n'y
-    // est pas utilisé (son groupe "notification" n'est pas compilé côté iOS).
-    if (!AppPlatform.isIOS) {
-      await requestPermissionWithRetry(Permission.notification);
-    }
-
+  /// Ne demande aucune autorisation : seul l'onboarding le fait, une fois
+  /// (voir OnboardingPermissions.requestNotifications).
+  ///
+  /// iOS : l'autorisation (alerte, badge, son) est demandée par
+  /// flutter_local_notifications lui-même à l'initialisation, uniquement avec
+  /// [requestIOSPermission] — permission_handler n'y est pas utilisé (son
+  /// groupe "notification" n'est pas compilé côté iOS).
+  Future<void> initialize({void Function()? onNotificationTap, bool requestIOSPermission = false}) async {
     const AndroidInitializationSettings androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const DarwinInitializationSettings iosSettings = DarwinInitializationSettings();
+    final DarwinInitializationSettings iosSettings = DarwinInitializationSettings(
+      requestAlertPermission: requestIOSPermission,
+      requestBadgePermission: requestIOSPermission,
+      requestSoundPermission: requestIOSPermission,
+    );
 
     await _plugin.initialize(
-      settings: const InitializationSettings(android: androidSettings, iOS: iosSettings),
+      settings: InitializationSettings(android: androidSettings, iOS: iosSettings),
       onDidReceiveNotificationResponse: (response) => onNotificationTap?.call(),
     );
   }

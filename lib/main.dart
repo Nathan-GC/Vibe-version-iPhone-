@@ -14,6 +14,7 @@ import 'core/networking/dev_http_overrides.dart';
 import 'core/platform/app_platform.dart';
 import 'core/storage/database/database_provider.dart';
 import 'core/storage/database/sandbox_path_relocator.dart';
+import 'features/onboarding/presentation/legal_consent.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -33,6 +34,10 @@ Future<void> main() async {
   // ci-dessous) — le handler pilote ainsi le même PlayerController que l'UI,
   // sans second moteur `just_audio` ni duplication de la logique de Queue.
   final ProviderContainer container = ProviderContainer();
+
+  // Conditions en vigueur acceptées avant tout le reste (premier lancement ou
+  // mise à jour) : lecteur, notification média et réseau attendent jusque-là.
+  await runLegalConsentGate(container);
 
   await bootstrap();
 

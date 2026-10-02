@@ -2,12 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 import '../core/platform/app_platform.dart';
 import '../core/purge/purge_providers.dart';
 import '../core/shared/onboarding_storage.dart';
-import '../core/shared/permission_retry.dart';
 import '../core/theme/global_theme/global_theme.dart';
 import '../core/theme/vibe_engine/active_vibe_provider.dart';
 import '../core/theme/vibe_engine/vibe_engine.dart';
@@ -32,35 +30,31 @@ class _PlaylistAppState extends ConsumerState<PlaylistApp> {
     if (AppPlatform.isIOS) {
       _lifecycleListener = AppLifecycleListener(onResume: _syncDocumentsLibraryIfOnboarded);
     }
-    // Demandes de permission après la première frame. Même après la première
-    // frame, l'attachement natif de l'Activity Android à permission_handler
-    // peut ne pas être terminé (course intermittente, confirmée sur
-    // émulateur : passe parfois, échoue parfois avec la même frame) — d'où
-    // le retry avec backoff plutôt qu'un simple délai fixe.
+    // Après la première frame (Activity Android attachée), les conditions
+    // étant déjà acceptées (voir runLegalConsentGate dans main.dart).
     // Repli premier-plan de la purge mensuelle (Étape 7) : le tap sur la
     // notification navigue vers la vue de nettoyage via le routeur global.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      // Premier lancement : l'onboarding (Étape 8) prend la main pour demander
-      // la permission audio et lancer le scan plein-appareil, puis redirige
-      // lui-même vers /player une fois l'indexation terminée — la demande de
-      // permission générique ci-dessous serait redondante dans ce cas précis,
-      // mais notifications locales et vérification de purge restent utiles
-      // dès ce premier lancement, donc pas de retour anticipé ici.
-      final bool firstLaunch = await OnboardingStorage().isFirstLaunch();
-      if (firstLaunch) {
+      // Premier lancement : l'onboarding demande lui-même notifications et
+      // audio, une seule fois (voir OnboardingScreen). Lancements suivants :
+      // aucune nouvelle demande d'autorisation — un refus reste respecté —,
+      // seul le tap sur la notification de nettoyage est câblé. La
+      // vérification de purge, simple lecture de la base locale, est faite
+      // dans les deux cas.
+      if (await OnboardingStorage().isFirstLaunch()) {
         appRouter.go('/onboarding');
-      } else if (AppPlatform.isIOS) {
-        // iOS : pas de permission audio (voir OnboardingScanController.start)
-        // — à la place, indexation incrémentale des morceaux déposés dans
-        // Fichiers > Sur mon iPhone > Vibe, en tâche de fond.
-        unawaited(ref.read(documentsSyncControllerProvider.notifier).sync(automatic: true));
       } else {
-        await requestPermissionWithRetry(Permission.audio);
+        if (AppPlatform.isIOS) {
+          // iOS : indexation incrémentale des morceaux déposés dans Fichiers >
+          // Sur mon iPhone > Vibe, en tâche de fond (sauf si l'import a été
+          // refusé à l'onboarding, voir DocumentsSyncController).
+          unawaited(ref.read(documentsSyncControllerProvider.notifier).sync(automatic: true));
+        }
+        await ref.read(localNotificationServiceProvider).initialize(
+              onNotificationTap: () => appRouter.go('/space/cleanup'),
+            );
       }
 
-      await ref.read(localNotificationServiceProvider).initialize(
-            onNotificationTap: () => appRouter.go('/space/cleanup'),
-          );
       await ref.read(purgeCheckOnLaunchProvider.future);
     });
   }
