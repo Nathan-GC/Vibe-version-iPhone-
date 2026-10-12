@@ -24,10 +24,22 @@ class ArtistNameNormalizer {
   /// vs un hypothétique artiste "William") seraient à tort regroupés — cas
   /// rare en pratique, largement compensé par les vrais doublons de
   /// casse/espacement qu'il permet de fusionner. Partagé par
-  /// [TrackRepository.mergeDuplicateCaseArtists] (fusion permanente en base)
-  /// et [dedupeCaseInsensitive] (dédoublonnage en lecture seule, listes de
-  /// sélection).
-  static String normalizeForGrouping(String name) => name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+  /// [TrackRepository.mergeDuplicateCaseArtists] (fusion permanente en base),
+  /// [dedupeCaseInsensitive] (dédoublonnage en lecture seule, listes de
+  /// sélection) et DriftArtistRepository.watchArtistTracks.
+  ///
+  /// Lettres et chiffres de TOUT alphabet conservés (Lot 2.2) : limitée à
+  /// `[a-z0-9]`, la clé effaçait les lettres accentuées ou non latines —
+  /// "宇多田ヒカル" et "아이유" (clé vide), "-M-" et "MØ" (clé "m") étaient
+  /// fusionnés en un seul artiste. Nom sans aucune lettre ni chiffre (ex.
+  /// "!!!") : repli sur le nom lui-même en minuscules, jamais une clé vide.
+  static String normalizeForGrouping(String name) {
+    final String lower = name.toLowerCase();
+    final String key = lower.replaceAll(_nonAlphanumeric, '');
+    return key.isEmpty ? lower.trim() : key;
+  }
+
+  static final RegExp _nonAlphanumeric = RegExp(r'[^\p{L}\p{N}]', unicode: true);
 
   // Permet de retrouver les frontières de mots d'une variante collée
   // ("DaftPunk") quand aucune variante déjà espacée n'existe dans le groupe.
@@ -67,7 +79,7 @@ class ArtistNameNormalizer {
   /// Fusion Manuelle, voir ManualArtistFusionScreen). Le nom canonique
   /// retourné n'est pas forcément un match exact `=` pour CHAQUE variante
   /// d'origine — tout code qui interroge ensuite les morceaux par ce nom doit
-  /// comparer sans tenir compte de la casse (voir
+  /// comparer par [normalizeForGrouping] (voir
   /// DriftArtistRepository.watchArtistTracks).
   static List<String> dedupeCaseInsensitive(Iterable<String> names) {
     final Map<String, Set<String>> variantsByNormalized = {};

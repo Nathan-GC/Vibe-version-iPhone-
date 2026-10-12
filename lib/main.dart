@@ -77,6 +77,11 @@ Future<void> main() async {
   // `androidStopForegroundOnPause: false` (le premier n'a d'effet que si le
   // second reste `true` — voir AudioServiceConfigMessage), donc les deux ne
   // peuvent pas être ajustés indépendamment ici.
+  //
+  // `artDownscale*` (Lot 1.1) : sans eux, la pochette de CHAQUE piste était
+  // décodée en pleine résolution (1000 à 3000 px, 4 à 36 Mo) dans le tas
+  // Java du service, pour une simple vignette de notification. Android
+  // uniquement : sans effet sur iOS, comme les champs `android*`.
   await AudioService.init(
     builder: () => PlaylistAudioHandler(container),
     config: const AudioServiceConfig(
@@ -84,6 +89,8 @@ Future<void> main() async {
       androidNotificationChannelName: 'Lecture audio',
       androidNotificationOngoing: true,
       notificationColor: Color(0xFF673AB7),
+      artDownscaleWidth: 512,
+      artDownscaleHeight: 512,
     ),
   );
 

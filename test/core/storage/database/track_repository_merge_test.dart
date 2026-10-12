@@ -67,6 +67,23 @@ void main() {
     expect(t2!.artists, ['Justice']);
   });
 
+  test('never merges distinct artists whose names only differ by non-ASCII letters', () async {
+    // Clé de regroupement autrefois limitée à [a-z0-9] : ces noms tombaient
+    // tous sur la même clé ("" ou "m") et étaient fusionnés en un seul artiste.
+    await _insertTrack(db, id: 't1', artists: ['宇多田ヒカル']);
+    await _insertTrack(db, id: 't2', artists: ['아이유']);
+    await _insertTrack(db, id: 't3', artists: ['-M-']);
+    await _insertTrack(db, id: 't4', artists: ['MØ']);
+
+    final int merged = await repository.mergeDuplicateCaseArtists();
+
+    expect(merged, 0);
+    expect((await repository.findById('t1'))!.artists, ['宇多田ヒカル']);
+    expect((await repository.findById('t2'))!.artists, ['아이유']);
+    expect((await repository.findById('t3'))!.artists, ['-M-']);
+    expect((await repository.findById('t4'))!.artists, ['MØ']);
+  });
+
   test('merges featuring artists too, not just the primary one', () async {
     await _insertTrack(db, id: 't1', artists: ['Daft Punk', 'PHARRELL WILLIAMS']);
     await _insertTrack(db, id: 't2', artists: ['pharrell williams']);

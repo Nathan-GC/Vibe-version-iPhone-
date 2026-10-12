@@ -215,7 +215,16 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
     List<Color>? colors;
     try {
       final ImageProvider image = path.startsWith('http') ? NetworkImage(path) : FileImage(File(path));
-      final PaletteGenerator palette = await PaletteGenerator.fromImageProvider(image, maximumColorCount: 12);
+      // Décodée en 112x112 (Lot 1.1, même taille que l'API Palette
+      // d'Android) : en pleine résolution, chaque changement de piste
+      // décodait la pochette (1000 à 3000 px, 4 à 36 Mo) puis analysait
+      // chaque pixel sur le thread UI — mémoire et saccades qui
+      // s'accumulaient au fil des playlists. Les proportions de couleurs,
+      // seules utiles ici, sont identiques.
+      final PaletteGenerator palette = await PaletteGenerator.fromImageProvider(
+        ResizeImage(image, width: 112, height: 112),
+        maximumColorCount: 12,
+      );
       final List<Color> extracted = [
         if (palette.dominantColor != null) palette.dominantColor!.color,
         if (palette.vibrantColor != null) palette.vibrantColor!.color,
@@ -226,7 +235,9 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
       colors = null;
     }
 
-    if (!mounted) return;
+    // Zap rapide : une extraction plus lente partie avant ne doit pas écraser
+    // la palette de la pochette désormais affichée.
+    if (!mounted || widget.coverArtPath != path) return;
     setState(() {
       _paletteColors = colors;
       _paletteSourcePath = path;

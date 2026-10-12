@@ -75,12 +75,16 @@ class TrackRepository {
   }
 
   /// Incrémente `play_count` et met à jour `last_played_at` — alimente le tri
-  /// Popularité (Étape 3) et la vue de purge des orphelins (Étape 7).
-  Future<void> recordPlay(String trackId) async {
-    final Track? track = await findById(trackId);
-    if (track == null) return;
-    await (_db.update(_db.tracks)..where((t) => t.id.equals(trackId))).write(
-      TracksCompanion(playCount: Value(track.playCount + 1), lastPlayedAt: Value(DateTime.now())),
+  /// Popularité (Étape 3) et la vue de purge des orphelins (Étape 7). Un seul
+  /// `UPDATE ... SET play_count = play_count + 1` (Lot 1.1) plutôt qu'une
+  /// lecture puis une écriture : appelé à chaque changement de piste, deux
+  /// appels rapprochés ne peuvent plus perdre une écoute.
+  Future<void> recordPlay(String trackId) {
+    return (_db.update(_db.tracks)..where((t) => t.id.equals(trackId))).write(
+      TracksCompanion.custom(
+        playCount: _db.tracks.playCount + const Constant(1),
+        lastPlayedAt: Variable(DateTime.now()),
+      ),
     );
   }
 

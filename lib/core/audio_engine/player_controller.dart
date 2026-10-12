@@ -1,14 +1,14 @@
 import 'dart:async';
 
 import 'package:audio_session/audio_session.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-import '../platform/app_platform.dart';
 import '../storage/database/app_database.dart';
 import '../storage/database/track_repository.dart';
-import 'ios_interruption_resume_policy.dart';
+import 'audio_interruption_policy.dart';
 import 'player_state_storage.dart';
 import 'queue_controller.dart';
 
@@ -54,8 +54,13 @@ class PlayerSnapshot {
 /// Moteur audio natif unique de l'app, isolé dans son propre provider pour
 /// pouvoir être remplacé par un faux lecteur dans les tests du
 /// [PlayerController].
+///
+/// `handleInterruptions: false` (Lot 1.2) : le focus audio est géré par le
+/// seul [PlayerController] (voir [AudioInterruptionPolicy]). Laissés actifs,
+/// les deux écouteurs se marchaient dessus — selon leur ordre d'appel, la
+/// pause de l'un effaçait la reprise automatique prévue par l'autre.
 final Provider<AudioPlayer> audioPlayerProvider = Provider<AudioPlayer>((ref) {
-  final AudioPlayer player = AudioPlayer();
+  final AudioPlayer player = AudioPlayer(handleInterruptions: false);
   ref.onDispose(player.dispose);
   return player;
 });
@@ -73,9 +78,24 @@ class PlayerController extends _$PlayerController {
   StreamSubscription<PlayerState>? _completionSub;
   StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
   StreamSubscription<void>? _becomingNoisySub;
-  final IosInterruptionResumePolicy _iosInterruptionPolicy = IosInterruptionResumePolicy();
+  final AudioInterruptionPolicy _interruptionPolicy = AudioInterruptionPolicy();
   int _currentIndex = -1;
   int _loadToken = 0;
+
+  /// Volume pendant qu'une autre app parle par-dessus (notification, GPS).
+  static const double duckVolume = 0.3;
+
+  /// Durée du fondu d'entrée à la reprise après une interruption.
+  static const Duration resumeFadeIn = Duration(milliseconds: 600);
+
+  /// "Précédent" au-delà de cette position relance le titre (Lot 2.1).
+  static const Duration restartThreshold = Duration(seconds: 3);
+
+  /// Volume normal du moment : [duckVolume] pendant un duck, sinon plein.
+  double _baseVolume = 1.0;
+
+  /// Jeton du fondu en cours : tout autre réglage de volume l'annule.
+  int _fadeToken = 0;
 
   /// Dernière piste DEMANDÉE, mise à jour de façon synchrone — en avance sur
   /// [_currentIndex] (piste réellement chargée) pendant un chargement : un
@@ -122,46 +142,67 @@ class PlayerController extends _$PlayerController {
     return const PlayerSnapshot(status: PlaybackStatus.idle);
   }
 
-  /// Audio Focus (Étape 5) : coupe la lecture sur appel entrant, notification
-  /// d'une autre app qui prend le focus, ou casque débranché. La reprise
-  /// automatique de la lecture à la fin d'une interruption transitoire (appel
-  /// raccroché, notification prioritaire écoulée) EST le comportement
-  /// officiel et voulu de Vibe Player — confirmé en QA (batterie Robustesse
-  /// Système, Section 1) : redémarrer sans geste utilisateur est attendu ici,
-  /// contrairement à une simple pause manuelle qui doit rester silencieuse.
-  /// Cette reprise est gérée nativement par la négociation de focus audio
-  /// d'ExoPlayer/just_audio côté Android dès que le focus est restitué ; ce
-  /// listener ne gère explicitement que le début de l'interruption
-  /// (`event.begin`), la fin n'a donc volontairement pas de branche dédiée.
+  /// Audio Focus (Étape 5, Lot 1.2) : `music()` = focus `gain` + usage media
+  /// (Android), catégorie `playback` (iOS). Baisse le volume sous une
+  /// notification, met en pause pendant un appel puis reprend en fondu (voir
+  /// [AudioInterruptionPolicy]) — la reprise automatique après une
+  /// interruption transitoire EST le comportement officiel de Vibe Player
+  /// (QA, batterie Robustesse Système, Section 1), contrairement à une pause
+  /// manuelle qui reste silencieuse. Casque débranché : pause, sans reprise.
   ///
-  /// iOS : AVFoundation ne reprend jamais seul — la fin d'interruption est
-  /// traitée explicitement par [IosInterruptionResumePolicy] pour obtenir le
-  /// même comportement que sur Android. `AudioSessionConfiguration.music()`
-  /// y correspond à la catégorie `AVAudioSessionCategoryPlayback` (lecture
-  /// écran verrouillé / interrupteur silencieux, avec `UIBackgroundModes:
-  /// audio` dans Info.plist).
+  /// iOS : AVFoundation ne reprend jamais seul, la reprise passe par la même
+  /// règle (fin d'interruption avec `shouldResume`) ; lecture écran verrouillé
+  /// et interrupteur silencieux via `UIBackgroundModes: audio` (Info.plist).
   Future<void> _configureAudioSession() async {
     final AudioSession session = await AudioSession.instance;
     await session.configure(const AudioSessionConfiguration.music());
 
-    _interruptionSub = session.interruptionEventStream.listen((event) {
-      if (AppPlatform.isIOS) {
-        _onIosInterruption(event);
-        return;
-      }
-      if (event.begin) pause();
-    });
-
+    _interruptionSub = session.interruptionEventStream.listen(onAudioInterruption);
     _becomingNoisySub = session.becomingNoisyEventStream.listen((_) => pause());
   }
 
-  void _onIosInterruption(AudioInterruptionEvent event) {
-    if (event.begin) {
-      _iosInterruptionPolicy.onInterruptionBegin(wasPlaying: _player.playing);
-      pause();
-      return;
+  @visibleForTesting
+  void onAudioInterruption(AudioInterruptionEvent event) {
+    switch (_interruptionPolicy.onEvent(event, isPlaying: _player.playing)) {
+      case InterruptionAction.duck:
+        _baseVolume = duckVolume;
+        _restoreVolume();
+      case InterruptionAction.unduck:
+        _baseVolume = 1.0;
+        _restoreVolume();
+      case InterruptionAction.pause:
+        unawaited(_player.pause());
+        _restoreVolume();
+      case InterruptionAction.resume:
+        unawaited(_resumeWithFadeIn());
+      case InterruptionAction.none:
+        break;
     }
-    if (_iosInterruptionPolicy.shouldResumeOnInterruptionEnd(event.type)) play();
+  }
+
+  /// Reprise "fluide" : repart du silence jusqu'à [_baseVolume] en
+  /// [resumeFadeIn] plutôt que de revenir d'un coup à plein volume.
+  Future<void> _resumeWithFadeIn() async {
+    if (state.currentTrack == null || _player.playing) return;
+    final int token = ++_fadeToken;
+    await _player.setVolume(0);
+    // Play/Pause de l'utilisateur pendant ce court délai : il a repris la
+    // main (et [_restoreVolume] a déjà rétabli le volume).
+    if (token != _fadeToken || !ref.mounted) return;
+    unawaited(_player.play());
+    const int steps = 10;
+    for (int step = 1; step <= steps; step++) {
+      await Future<void>.delayed(resumeFadeIn ~/ steps);
+      if (token != _fadeToken || !ref.mounted) return;
+      await _player.setVolume(_baseVolume * step / steps);
+    }
+  }
+
+  /// Annule un fondu en cours et remet aussitôt le volume normal — sans quoi
+  /// un Play/Pause pendant le fondu pourrait laisser le lecteur muet.
+  void _restoreVolume() {
+    _fadeToken++;
+    if (_player.volume != _baseVolume) unawaited(_player.setVolume(_baseVolume));
   }
 
   Stream<Duration> get positionStream => _player.positionStream;
@@ -175,6 +216,14 @@ class PlayerController extends _$PlayerController {
   /// (le morceau de départ reste en tête) plutôt que jouée dans l'ordre
   /// affiché puis mélangée après coup.
   Future<void> playPlaylist(String playlistId, List<Track> tracks, {int startIndex = 0}) async {
+    // Lot 1.1 : changement de playlist — `stop()` détruit l'instance native
+    // (ExoPlayer/AVPlayer) et, avec elle, le cache de sources de just_audio,
+    // qui garde sinon en mémoire chaque piste chargée depuis le lancement
+    // (vidé seulement à la destruction du lecteur). Recréée au chargement
+    // suivant, en ~100 ms.
+    final String? previousPlaylistId = state.currentPlaylistId;
+    if (previousPlaylistId != null && previousPlaylistId != playlistId) await _player.stop();
+
     final List<String> ids = tracks.map((t) => t.id).toList();
     ref.read(queueControllerProvider.notifier).restore(ids);
 
@@ -311,12 +360,19 @@ class PlayerController extends _$PlayerController {
   /// charge en continu (voir son commentaire) — se fier à cette unique source
   /// plutôt que de dupliquer l'assignation ici évite tout risque de
   /// désynchronisation entre les deux.
+  ///
+  /// Commandes de l'utilisateur : annulent toute reprise automatique après
+  /// interruption, et tout fondu en cours (voir [onAudioInterruption]).
   Future<void> play() async {
+    _interruptionPolicy.onUserCommand();
+    _restoreVolume();
     if (state.currentTrack == null || _player.playing) return;
     await _player.play();
   }
 
   Future<void> pause() async {
+    _interruptionPolicy.onUserCommand();
+    _restoreVolume();
     if (!_player.playing) return;
     await _player.pause();
   }
@@ -325,17 +381,27 @@ class PlayerController extends _$PlayerController {
 
   Future<void> next() async => _skip(1);
 
-  Future<void> previous() async => _skip(-1);
+  /// Lot 2.1 : lecture entamée depuis plus de [restartThreshold] → relance
+  /// le titre au début ; sinon titre précédent, et du premier titre on boucle
+  /// sur le dernier de la file. Pendant un zap (piste visée pas encore
+  /// démarrée), chaque appui recule d'un titre.
+  Future<void> previous() async {
+    final bool zapping = (_skipDebounce?.isActive ?? false) || _targetIndex != _currentIndex;
+    if (!zapping && _player.position > restartThreshold) return seek(Duration.zero);
+    _skip(-1);
+  }
 
   /// Suivant/Précédent — boutons du Lecteur ET notification/écran verrouillé
   /// (PlaylistAudioHandler appelle ces mêmes méthodes). Chaque appui décale
   /// la cible de façon synchrone depuis la dernière cible demandée, affiche
   /// aussitôt le morceau visé, et un seul chargement audio part une fois les
-  /// appuis stabilisés ([skipDebounce]).
+  /// appuis stabilisés ([skipDebounce]). "Précédent" depuis le premier titre
+  /// boucle sur le dernier (Lot 2.1) ; "Suivant" s'arrête au dernier.
   void _skip(int delta) {
     final List<Track>? tracks = ref.read(queueTracksProvider).value;
-    final int target = _targetIndex + delta;
-    if (tracks == null || target < 0 || target >= tracks.length) return;
+    if (tracks == null || tracks.isEmpty) return;
+    final int target = (delta < 0 && _targetIndex == 0) ? tracks.length - 1 : _targetIndex + delta;
+    if (target < 0 || target >= tracks.length) return;
 
     _targetIndex = target;
     state = state.copyWith(currentTrack: tracks[target]);

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -122,6 +124,57 @@ void main() {
       final List<Track> tracks = await artistRepository.watchArtistTracks(canonical).first;
 
       expect(tracks.map((t) => t.id).toSet(), {'t1', 't2'});
+    });
+
+    // Lot 2.2 : "Ajouter par artiste" omettait des morceaux — la liste regroupe
+    // les variantes par clé (casse, espaces, ponctuation), la requête ne
+    // comparait que la casse, et seulement en ASCII (`lower()` SQLite).
+    test('returns every spelling grouped under the listed name (punctuation, spacing, accented capitals)', () async {
+      await addTrack(id: 't1', artists: ['Jay-Z']);
+      await addTrack(id: 't2', artists: ['JAY Z']);
+      await addTrack(id: 't3', artists: ['CÉLINE DION']);
+      await addTrack(id: 't4', artists: ['Céline Dion']);
+      final List<String> names = await artistRepository.fetchAllArtistNames();
+      expect(names, hasLength(2));
+
+      Future<Set<String>> idsFor(String fragment) async {
+        final String name = names.singleWhere((n) => n.toLowerCase().contains(fragment));
+        return (await artistRepository.watchArtistTracks(name).first).map((t) => t.id).toSet();
+      }
+
+      expect(await idsFor('jay'), {'t1', 't2'});
+      expect(await idsFor('céline'), {'t3', 't4'});
+    });
+
+    test('keeps artists written in non-Latin scripts apart instead of collapsing them into one entry', () async {
+      await addTrack(id: 't1', artists: ['宇多田ヒカル']);
+      await addTrack(id: 't2', artists: ['아이유']);
+
+      final List<String> names = await artistRepository.fetchAllArtistNames();
+
+      expect(names.toSet(), {'宇多田ヒカル', '아이유'});
+      expect((await artistRepository.watchArtistTracks('아이유').first).map((t) => t.id), ['t2']);
+    });
+
+    test('lists a track credited under two spellings of the same artist only once', () async {
+      await addTrack(id: 't1', artists: ['Daft Punk', 'DAFT PUNK']);
+
+      final List<Track> tracks = await artistRepository.watchArtistTracks('Daft Punk').first;
+
+      expect(tracks.map((t) => t.id), ['t1']);
+    });
+
+    test('re-emits when a new spelling of the artist is imported later', () async {
+      await addTrack(id: 't1', artists: ['Daft Punk']);
+      final StreamIterator<List<Track>> updates = StreamIterator(artistRepository.watchArtistTracks('Daft Punk'));
+      addTearDown(updates.cancel);
+      expect(await updates.moveNext(), isTrue);
+      expect(updates.current.map((t) => t.id), ['t1']);
+
+      await addTrack(id: 't2', artists: ['DAFT-PUNK']);
+
+      expect(await updates.moveNext(), isTrue);
+      expect(updates.current.map((t) => t.id).toSet(), {'t1', 't2'});
     });
   });
 }

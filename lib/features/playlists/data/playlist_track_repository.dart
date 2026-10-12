@@ -12,11 +12,16 @@ class PlaylistTrackRepository {
 
   final AppDatabase _db;
 
-  Future<void> addTrack(String playlistId, String trackId) async {
-    final int nextPosition = await _nextPosition(playlistId);
-    await _db.into(_db.playlistTracks).insertOnConflictUpdate(
-          PlaylistTracksCompanion.insert(playlistId: playlistId, trackId: trackId, position: nextPosition),
-        );
+  /// Lecture de la position suivante + insertion dans UNE transaction (Lot
+  /// 1.1) : Drift sérialise les transactions, deux ajouts simultanés ("J'aime"
+  /// et "Ajouter à une playlist") ne peuvent plus obtenir la même position.
+  Future<void> addTrack(String playlistId, String trackId) {
+    return _db.transaction(() async {
+      final int nextPosition = await _nextPosition(playlistId);
+      await _db.into(_db.playlistTracks).insertOnConflictUpdate(
+            PlaylistTracksCompanion.insert(playlistId: playlistId, trackId: trackId, position: nextPosition),
+          );
+    });
   }
 
   /// Ajout en masse (ex. "Ajouter par artiste" de l'éditeur de playlist,
@@ -24,7 +29,9 @@ class PlaylistTrackRepository {
   /// séquentiels à [addTrack], qui recalculeraient chacun `_nextPosition` par
   /// une requête à part — coûteux et sujet à une position dupliquée si deux
   /// ajouts se chevauchaient. [trackIds] déjà présents dans la playlist sont
-  /// ignorés (jamais dupliqués ni déplacés) plutôt qu'écrasés.
+  /// ignorés (jamais dupliqués ni déplacés) plutôt qu'écrasés, tout comme un
+  /// id répété dans [trackIds] (sinon violation de clé primaire : rien
+  /// n'était ajouté).
   Future<int> addTracks(String playlistId, List<String> trackIds) async {
     if (trackIds.isEmpty) return 0;
 
@@ -32,7 +39,7 @@ class PlaylistTrackRepository {
       final List<PlaylistTrack> existing =
           await (_db.select(_db.playlistTracks)..where((t) => t.playlistId.equals(playlistId))).get();
       final Set<String> alreadyPresent = existing.map((t) => t.trackId).toSet();
-      final List<String> toAdd = trackIds.where((id) => !alreadyPresent.contains(id)).toList();
+      final List<String> toAdd = {...trackIds}.where((id) => !alreadyPresent.contains(id)).toList();
       if (toAdd.isEmpty) return 0;
 
       int nextPosition = await _nextPosition(playlistId);

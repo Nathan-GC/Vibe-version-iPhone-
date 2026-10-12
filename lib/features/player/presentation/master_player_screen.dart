@@ -86,6 +86,14 @@ class _MasterPlayerScreenState extends ConsumerState<MasterPlayerScreen> with Si
       if (nextId != null && nextId != previousId) {
         VibeHapticService.trigger(context, VibeInteraction.trackChange);
       }
+      // Lot 1.1 : changement de playlist — vide le cache des images décodées
+      // qui ne sont plus affichées (pochettes de la playlist précédente). Les
+      // images encore à l'écran, dont les onglets gardés en mémoire par
+      // l'IndexedStack, ne sont pas concernées.
+      final String? previousPlaylistId = previous?.currentPlaylistId;
+      if (previousPlaylistId != null && next.currentPlaylistId != previousPlaylistId) {
+        PaintingBinding.instance.imageCache.clear();
+      }
     });
 
     // Continuité des Vibes : le ticker tourne en permanence (démarré dans
@@ -257,8 +265,11 @@ class _VibeBackgroundImageLayer extends StatelessWidget {
           // `Image.file` sans errorBuilder fait planter le rendu du Viewport
           // parent avec "RenderViewport expected a child of type RenderSliver
           // but received a child of type RenderErrorBox").
+          // Décodée à la hauteur de l'écran (Lot 1.1) plutôt qu'à celle de la
+          // photo importée (12 Mpx ≈ 48 Mo décodés).
           child: Image.file(
             File(path),
+            cacheHeight: (MediaQuery.sizeOf(context).longestSide * MediaQuery.devicePixelRatioOf(context)).round(),
             fit: BoxFit.cover,
             errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
           ),

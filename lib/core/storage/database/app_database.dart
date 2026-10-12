@@ -380,7 +380,15 @@ class AppDatabase extends _$AppDatabase {
   /// lieu d'échouer aussitôt sur "database is locked" (délai SQLite par
   /// défaut : 0) — l'app et la tâche de purge d'arrière-plan (WorkManager,
   /// isolate séparé) ouvrent chacune la leur sur le même fichier.
-  static void configureConnection(CommonDatabase database) => database.execute('PRAGMA busy_timeout = 5000');
+  ///
+  /// Journal WAL (Lot 1.1) : une lecture n'attend plus jamais une écriture de
+  /// l'autre connexion (ni l'inverse) — seuls deux rédacteurs simultanés
+  /// patientent encore, via le délai ci-dessus. Réglage du fichier, sans
+  /// incidence sur le schéma (v16 inchangée) ; sans effet en mémoire (tests).
+  static void configureConnection(CommonDatabase database) {
+    database.execute('PRAGMA busy_timeout = 5000');
+    database.execute('PRAGMA journal_mode = WAL');
+  }
 
   /// Android : emplacement par défaut de drift_flutter (inchangé).
   /// iOS : `Library/Application Support` plutôt que le dossier Documents

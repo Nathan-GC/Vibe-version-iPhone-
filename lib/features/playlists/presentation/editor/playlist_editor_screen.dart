@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -14,6 +15,7 @@ import '../../../../core/storage/database/track_repository.dart';
 import '../../../../core/theme/design_system/app_spacing.dart';
 import '../../../library/data/library_providers.dart';
 import '../../data/playlist_providers.dart';
+import '../../domain/block_reorder.dart';
 import '../../domain/playlist_editor_entry.dart';
 import 'add_by_artist_sheet.dart';
 
@@ -33,6 +35,13 @@ class PlaylistEditorScreen extends ConsumerStatefulWidget {
 class _PlaylistEditorScreenState extends ConsumerState<PlaylistEditorScreen> {
   List<PlaylistEditorEntry>? _localOrder;
   bool _saving = false;
+
+  /// Réorganisation intelligente par bloc (Lot 3.2), activée par son propre
+  /// bouton : le long-appui reste réservé aux actions du titre. Temps 1 :
+  /// cocher des titres, même éloignés ([_selectedKeys], clés
+  /// [PlaylistEditorEntry.key]) ; temps 2 : "Déplacer…" vers une position.
+  bool _smartReorder = false;
+  final Set<String> _selectedKeys = {};
 
   /// Barre de recherche (titre + artiste, sans casse ni accents — voir
   /// [trackMatchesSearch]) réservée à "Tous les titres importés" : la seule
@@ -177,20 +186,118 @@ class _PlaylistEditorScreenState extends ConsumerState<PlaylistEditorScreen> {
     await ref.read(playlistRepositoryProvider).updateCoverImagePath(widget.playlistId, imported.path);
   }
 
-  Future<void> _commit() async {
+  Future<void> _commit({String message = 'Playlist enregistrée'}) async {
     if (_localOrder == null) return;
     setState(() => _saving = true);
 
     // Titres grisés compris : ils gardent la place où l'utilisateur les a
-    // déplacés (numérotation commune, voir PlaylistMissingTracks).
+    // déplacés (numérotation commune, voir PlaylistMissingTracks). Une seule
+    // transaction : toutes les positions changent ensemble, ou aucune.
     await ref.read(playlistRepositoryProvider).commitOrder(widget.playlistId, _localOrder!);
 
+    // Ordre relu en base (plus de pending, version incrémentée) plutôt que
+    // `_localOrder = null` : le flux pouvait encore porter l'ordre d'avant
+    // l'enregistrement au rebuild suivant — voir [_refreshLocalOrder].
+    if (mounted) await _refreshLocalOrder();
     if (!mounted) return;
+    setState(() => _saving = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _toggleSmartReorder() {
+    if (!_smartReorder) _clearSearch(); // l'ordre complet, jamais un sous-ensemble filtré
     setState(() {
-      _saving = false;
-      _localOrder = null; // reprend le flux à jour : plus de pending, version incrémentée.
+      _smartReorder = !_smartReorder;
+      _selectedKeys.clear();
     });
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Playlist enregistrée')));
+  }
+
+  void _toggleSelected(PlaylistEditorEntry entry) {
+    setState(() {
+      if (!_selectedKeys.remove(entry.key)) _selectedKeys.add(entry.key);
+    });
+  }
+
+  /// Temps 2 : la position choisie est celle du 1er titre du bloc dans la
+  /// playlist finale ; les titres cochés y sont réunis dans leur ordre
+  /// actuel, puis l'ordre complet est enregistré d'un bloc ([_commit]).
+  Future<void> _moveSelection() async {
+    final List<PlaylistEditorEntry> list = _localOrder!;
+    final Set<int> selected = {
+      for (int i = 0; i < list.length; i++)
+        if (_selectedKeys.contains(list[i].key)) i,
+    };
+    final int maxPosition = list.length - selected.length + 1;
+    final int? position = await showDialog<int>(
+      context: context,
+      builder: (context) => _MoveBlockDialog(count: selected.length, maxPosition: maxPosition),
+    );
+    if (position == null || !mounted) return;
+
+    setState(() {
+      _localOrder = moveAsBlock(list, selected, position - 1);
+      _selectedKeys.clear();
+    });
+    final int count = selected.length;
+    await _commit(
+      message: count > 1
+          ? '$count titres regroupés en positions $position à ${position + count - 1}'
+          : 'Titre déplacé en position $position',
+    );
+  }
+
+  Widget _smartReorderList(List<PlaylistEditorEntry> list) {
+    final int count = _selectedKeys.length;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(AppSpacing.m, 0, AppSpacing.m, AppSpacing.s),
+          child: Text(
+            '1. Coche les titres à regrouper, même éloignés.\n'
+            '2. « Déplacer » : ils sont réunis à la position choisie, dans leur ordre actuel.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            itemCount: list.length,
+            itemBuilder: (context, index) {
+              final PlaylistEditorEntry entry = list[index];
+              final Track? track = entry.track;
+              return _EditorTile(
+                key: ValueKey(entry.key),
+                index: index,
+                entry: entry,
+                showDragHandle: false,
+                selected: _selectedKeys.contains(entry.key),
+                onTap: () => _toggleSelected(entry),
+                onLongPress: track != null ? () => _openTrackActions(track) : () => _openMissingActions(entry.missing!),
+              );
+            },
+          ),
+        ),
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpacing.m),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(count == 0
+                      ? 'Aucun titre sélectionné'
+                      : '$count titre${count > 1 ? 's' : ''} sélectionné${count > 1 ? 's' : ''}'),
+                ),
+                FilledButton.icon(
+                  icon: const Icon(Icons.low_priority),
+                  label: const Text('Déplacer…'),
+                  onPressed: count == 0 || _saving ? null : _moveSelection,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -208,8 +315,14 @@ class _PlaylistEditorScreenState extends ConsumerState<PlaylistEditorScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Éditeur'),
+        title: Text(_smartReorder ? 'Réorganisation' : 'Éditeur'),
         actions: [
+          IconButton(
+            icon: Icon(_smartReorder ? Icons.close : Icons.low_priority),
+            tooltip: _smartReorder ? 'Quitter la réorganisation intelligente' : 'Réorganisation intelligente',
+            // Toujours possible d'en SORTIR, même si la playlist s'est vidée.
+            onPressed: _saving || (!_smartReorder && (_localOrder?.isEmpty ?? true)) ? null : _toggleSmartReorder,
+          ),
           IconButton(
             icon: const Icon(Icons.person_add_alt_outlined),
             tooltip: 'Ajouter par artiste',
@@ -226,7 +339,7 @@ class _PlaylistEditorScreenState extends ConsumerState<PlaylistEditorScreen> {
       body: Column(
         children: [
           if (playlist.value != null) _CoverHeader(playlist: playlist.value!, onPickImage: _pickCoverImage),
-          if (_searchEnabled)
+          if (_searchEnabled && !_smartReorder)
             Padding(
               padding: const EdgeInsets.fromLTRB(AppSpacing.m, 0, AppSpacing.m, AppSpacing.s),
               child: TextField(
@@ -259,6 +372,8 @@ class _PlaylistEditorScreenState extends ConsumerState<PlaylistEditorScreen> {
                     ),
                   );
                 }
+
+                if (_smartReorder) return _smartReorderList(list);
 
                 // Recherche active : simple liste filtrée, sans glisser-
                 // déposer — réordonner un sous-ensemble filtré n'aurait pas
@@ -405,6 +520,7 @@ class _EditorTile extends StatelessWidget {
     required this.onLongPress,
     this.onTap,
     this.showDragHandle = true,
+    this.selected,
   });
 
   final int index;
@@ -416,12 +532,17 @@ class _EditorTile extends StatelessWidget {
   /// [ReorderableDragStartListener] exige un ancêtre réordonnable.
   final bool showDragHandle;
 
+  /// Non nul en réorganisation intelligente (Lot 3.2) : case à cocher en
+  /// tête et position (1, 2, 3...) en fin de ligne, pour viser la cible.
+  final bool? selected;
+
   @override
   Widget build(BuildContext context) {
     // Titre grisé : couleur atténuée (texte ET icônes), mention
     // "introuvable" — reste déplaçable pour garder sa place dans l'ordre.
     final bool missing = entry.isMissing;
     final Color? dimmed = missing ? Theme.of(context).disabledColor : null;
+    final bool? selected = this.selected;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -430,7 +551,14 @@ class _EditorTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
       ),
       child: ListTile(
-        leading: missing ? Icon(Icons.link_off, color: dimmed) : null,
+        selected: selected ?? false,
+        leading: selected != null
+            ? Checkbox(
+                value: selected,
+                semanticLabel: 'Sélectionner ${entry.title}',
+                onChanged: (_) => onTap?.call(),
+              )
+            : (missing ? Icon(Icons.link_off, color: dimmed) : null),
         title: Text(entry.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: dimmed)),
         subtitle: Text(
           missing ? '${entry.artistLabel} · introuvable' : entry.artistLabel,
@@ -438,12 +566,67 @@ class _EditorTile extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: TextStyle(color: dimmed, fontStyle: missing ? FontStyle.italic : null),
         ),
-        trailing: showDragHandle
-            ? ReorderableDragStartListener(index: index, child: Icon(Icons.drag_handle, color: dimmed))
-            : null,
+        trailing: selected != null
+            ? Text('${index + 1}', semanticsLabel: 'position ${index + 1}')
+            : (showDragHandle
+                ? ReorderableDragStartListener(index: index, child: Icon(Icons.drag_handle, color: dimmed))
+                : null),
         onTap: onTap,
         onLongPress: onLongPress,
       ),
+    );
+  }
+}
+
+/// Temps 2 de la réorganisation intelligente : position (1 à [maxPosition])
+/// que prendra le 1er titre du bloc. StatefulWidget pour posséder (et
+/// libérer) son propre contrôleur de saisie.
+class _MoveBlockDialog extends StatefulWidget {
+  const _MoveBlockDialog({required this.count, required this.maxPosition});
+
+  final int count;
+  final int maxPosition;
+
+  @override
+  State<_MoveBlockDialog> createState() => _MoveBlockDialogState();
+}
+
+class _MoveBlockDialogState extends State<_MoveBlockDialog> {
+  final TextEditingController _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final int? position = int.tryParse(_controller.text);
+    if (position == null) return;
+    Navigator.of(context).pop(position.clamp(1, widget.maxPosition));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final int count = widget.count;
+    return AlertDialog(
+      title: Text('Déplacer $count titre${count > 1 ? 's' : ''}'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        keyboardType: TextInputType.number,
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        decoration: InputDecoration(
+          labelText: 'Nouvelle position',
+          helperText: 'De 1 à ${widget.maxPosition} — position du 1er titre du bloc',
+        ),
+        onSubmitted: (_) => _submit(),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(1), child: const Text('Au début')),
+        TextButton(onPressed: () => Navigator.of(context).pop(widget.maxPosition), child: const Text('À la fin')),
+        FilledButton(onPressed: _submit, child: const Text('Déplacer')),
+      ],
     );
   }
 }

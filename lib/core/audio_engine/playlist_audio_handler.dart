@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../features/playlists/data/playlist_providers.dart';
+import '../platform/app_platform.dart';
 import '../storage/database/app_database.dart';
 import 'player_controller.dart';
 
@@ -71,6 +74,45 @@ class PlaylistAudioHandler extends BaseAudioHandler with SeekHandler {
   Uri? _artUri(String path) {
     if (path.isEmpty) return null;
     return path.startsWith('http') ? Uri.tryParse(path) : Uri.file(path);
+  }
+
+  /// Fenêtre de détection des appuis multiples (= double-tap Android).
+  static const Duration multiPressWindow = Duration(milliseconds: 300);
+  Timer? _multiPressTimer;
+  int _pressCount = 0;
+
+  /// Boutons physiques casque/Bluetooth (Lot 1.3) : suivant/précédent reliés
+  /// directement au PlayerController. Bouton unique (casque filaire,
+  /// HEADSETHOOK) sur Android : 1 appui = lecture/pause, 2 = suivant, 3 =
+  /// précédent — détection qu'Android ne fait plus quand `audio_service`
+  /// reçoit lui-même les MEDIA_BUTTON, d'où ces commandes jusqu'ici
+  /// inaccessibles. iOS traduit nativement ces appuis multiples en
+  /// suivant/précédent : bascule immédiate, sans attente.
+  @override
+  Future<void> click([MediaButton button = MediaButton.media]) async {
+    final PlayerController player = _container.read(playerControllerProvider.notifier);
+    switch (button) {
+      case MediaButton.next:
+        return player.next();
+      case MediaButton.previous:
+        return player.previous();
+      case MediaButton.media:
+        if (AppPlatform.isIOS) return player.togglePlayPause();
+        _pressCount++;
+        _multiPressTimer?.cancel();
+        _multiPressTimer = Timer(multiPressWindow, () {
+          final int presses = _pressCount;
+          _pressCount = 0;
+          switch (presses) {
+            case 1:
+              player.togglePlayPause();
+            case 2:
+              player.next();
+            default:
+              player.previous();
+          }
+        });
+    }
   }
 
   @override

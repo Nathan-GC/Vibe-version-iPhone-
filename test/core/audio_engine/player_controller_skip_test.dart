@@ -1,6 +1,9 @@
 import 'dart:async';
 
+import 'package:audio_service/audio_service.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:drift/native.dart';
+import 'package:flutter/foundation.dart' show TargetPlatform, debugDefaultTargetPlatformOverride;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -46,13 +49,39 @@ class _FakeAudioPlayer implements AudioPlayer {
   Stream<Duration> get positionStream => const Stream.empty();
 
   @override
-  bool get playing => false;
+  bool playing = false;
 
   @override
-  Future<void> play() async {}
+  Future<void> play() async => playing = true;
 
   @override
-  Future<void> pause() async {}
+  Future<void> pause() async => playing = false;
+
+  /// Nombre de libérations explicites du lecteur natif.
+  int stops = 0;
+
+  @override
+  Future<void> stop() async {
+    stops++;
+    playing = false;
+  }
+
+  @override
+  Duration position = Duration.zero;
+
+  Duration? seekedTo;
+
+  @override
+  Future<void> seek(Duration? position, {int? index}) async {
+    seekedTo = position;
+    this.position = position ?? Duration.zero;
+  }
+
+  @override
+  double volume = 1.0;
+
+  @override
+  Future<void> setVolume(double volume) async => this.volume = volume;
 
   @override
   Future<void> dispose() async {}
@@ -155,6 +184,68 @@ void main() {
     expect(audio.loaded, pathOf(1));
   });
 
+  group('headset & Bluetooth buttons (Lot 1.3)', () {
+    late PlaylistAudioHandler handler;
+    Future<void> afterPresses() => Future<void>.delayed(PlaylistAudioHandler.multiPressWindow * 2);
+
+    setUp(() async {
+      handler = PlaylistAudioHandler(container);
+      await container.read(playerControllerProvider.notifier).playPlaylist('p', tracks, startIndex: 2);
+    });
+
+    test('a single press of the headset button toggles play/pause', () async {
+      expect(audio.playing, isTrue);
+
+      await handler.click();
+      await afterPresses();
+      expect(audio.playing, isFalse);
+
+      await handler.click();
+      await afterPresses();
+      expect(audio.playing, isTrue);
+    });
+
+    test('a double press skips to the next track', () async {
+      await handler.click();
+      await handler.click();
+      await afterPresses();
+      await settle();
+
+      expect(currentId(), 't3');
+      expect(audio.playing, isTrue, reason: 'un double appui ne doit pas aussi mettre en pause');
+    });
+
+    test('a triple press goes back to the previous track', () async {
+      for (int i = 0; i < 3; i++) {
+        await handler.click();
+      }
+      await afterPresses();
+      await settle();
+
+      expect(currentId(), 't1');
+    });
+
+    test('on iOS, a press toggles at once (iOS turns double/triple presses into next/previous itself)', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      try {
+        await handler.click();
+        expect(audio.playing, isFalse, reason: 'aucune fenêtre d\'attente des appuis multiples');
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    test('dedicated Bluetooth next/previous keys map straight to next/previous', () async {
+      await handler.click(MediaButton.next);
+      await settle();
+      expect(currentId(), 't3');
+
+      await handler.click(MediaButton.previous);
+      await settle();
+      expect(currentId(), 't2');
+    });
+  });
+
   test('a load interrupted by a newer one never falls through to another track', () async {
     final PlayerController player = container.read(playerControllerProvider.notifier);
 
@@ -170,7 +261,7 @@ void main() {
     expect(audio.loaded, pathOf(3), reason: 'le chargement interrompu de t1 ne doit pas enchaîner sur t2');
   });
 
-  test('zapping stops at the ends of the queue', () async {
+  test('"Suivant" stops at the end of the queue, "Précédent" wraps from the first track to the last', () async {
     final PlayerController player = container.read(playerControllerProvider.notifier);
 
     unawaited(player.next());
@@ -183,7 +274,145 @@ void main() {
       unawaited(player.previous());
     }
     await settle();
-    expect(currentId(), 't0');
-    expect(audio.loaded, pathOf(0));
+    expect(currentId(), 't3', reason: 't1 -> t0 -> t5 (bouclage) -> t4 -> t3');
+    expect(audio.loaded, pathOf(3));
+  });
+
+  group('"Précédent" (Lot 2.1)', () {
+    test('after more than 3 s of playback, restarts the current track instead of going back', () async {
+      final PlayerController player = container.read(playerControllerProvider.notifier);
+      audio.position = const Duration(seconds: 10);
+
+      await player.previous();
+      await settle();
+
+      expect(audio.seekedTo, Duration.zero);
+      expect(currentId(), 't5');
+      expect(audio.loaded, pathOf(5));
+    });
+
+    test('within the first 3 s, goes to the previous track', () async {
+      final PlayerController player = container.read(playerControllerProvider.notifier);
+      audio.position = const Duration(seconds: 2);
+
+      await player.previous();
+      await settle();
+
+      expect(audio.seekedTo, isNull);
+      expect(currentId(), 't4');
+      expect(audio.loaded, pathOf(4));
+    });
+
+    test('from the first track, jumps to the last track of the playlist', () async {
+      final PlayerController player = container.read(playerControllerProvider.notifier);
+      await player.playPlaylist('p', tracks, startIndex: 0);
+
+      await player.previous();
+      await settle();
+
+      expect(currentId(), 't5');
+      expect(audio.loaded, pathOf(5));
+    });
+
+    test('a quick double press restarts the track, then goes back one track', () async {
+      final PlayerController player = container.read(playerControllerProvider.notifier);
+      audio.position = const Duration(seconds: 42);
+
+      await player.previous();
+      await player.previous();
+      await settle();
+
+      expect(currentId(), 't4');
+    });
+  });
+
+  group('audio focus (Lot 1.2)', () {
+    late PlayerController player;
+
+    setUp(() {
+      player = container.read(playerControllerProvider.notifier);
+      expect(audio.playing, isTrue, reason: 'la lecture tourne avant l\'interruption');
+    });
+
+    test('a notification only lowers the volume, then restores it — playback never stops', () async {
+      player.onAudioInterruption(AudioInterruptionEvent(true, AudioInterruptionType.duck));
+      expect(audio.playing, isTrue);
+      expect(audio.volume, PlayerController.duckVolume);
+
+      player.onAudioInterruption(AudioInterruptionEvent(false, AudioInterruptionType.duck));
+      expect(audio.playing, isTrue);
+      expect(audio.volume, 1.0);
+    });
+
+    test('a call pauses playback, which resumes with a fade-in once it ends', () async {
+      player.onAudioInterruption(AudioInterruptionEvent(true, AudioInterruptionType.pause));
+      expect(audio.playing, isFalse);
+
+      player.onAudioInterruption(AudioInterruptionEvent(false, AudioInterruptionType.pause));
+      await Future<void>.delayed(Duration.zero);
+      expect(audio.playing, isTrue);
+      expect(audio.volume, lessThan(1.0), reason: 'repart en fondu, pas d\'un coup à plein volume');
+
+      await Future<void>.delayed(PlayerController.resumeFadeIn * 2);
+      expect(audio.volume, 1.0);
+    });
+
+    test('a pause from the user during the interruption cancels the automatic resume', () async {
+      player.onAudioInterruption(AudioInterruptionEvent(true, AudioInterruptionType.pause));
+      await player.pause();
+
+      player.onAudioInterruption(AudioInterruptionEvent(false, AudioInterruptionType.pause));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(audio.playing, isFalse);
+    });
+
+    test('a pause during the fade-in restores the full volume for the next play', () async {
+      player.onAudioInterruption(AudioInterruptionEvent(true, AudioInterruptionType.pause));
+      player.onAudioInterruption(AudioInterruptionEvent(false, AudioInterruptionType.pause));
+      await Future<void>.delayed(Duration.zero);
+
+      await player.pause();
+      await Future<void>.delayed(PlayerController.resumeFadeIn * 2);
+
+      expect(audio.playing, isFalse);
+      expect(audio.volume, 1.0);
+    });
+
+    test('iOS: an interruption (typeless begin) resumes when the system says it should (shouldResume)', () async {
+      player.onAudioInterruption(AudioInterruptionEvent(true, AudioInterruptionType.unknown));
+      expect(audio.playing, isFalse);
+
+      player.onAudioInterruption(AudioInterruptionEvent(false, AudioInterruptionType.pause));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(audio.playing, isTrue);
+    });
+
+    test('an interruption that ends without permission to resume leaves playback paused', () async {
+      player.onAudioInterruption(AudioInterruptionEvent(true, AudioInterruptionType.unknown));
+      player.onAudioInterruption(AudioInterruptionEvent(false, AudioInterruptionType.unknown));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(audio.playing, isFalse);
+    });
+  });
+
+  group('playlist switch (Lot 1.1)', () {
+    test('switching to another playlist releases the native player before loading the new queue', () async {
+      final PlayerController player = container.read(playerControllerProvider.notifier);
+
+      await player.playPlaylist('other', tracks, startIndex: 2);
+
+      expect(audio.stops, 1);
+      expect(audio.loaded, pathOf(2));
+      expect(container.read(playerControllerProvider).currentPlaylistId, 'other');
+    });
+
+    test('restarting the same playlist keeps the native player', () async {
+      await container.read(playerControllerProvider.notifier).playPlaylist('p', tracks, startIndex: 2);
+
+      expect(audio.stops, 0);
+    });
   });
 }

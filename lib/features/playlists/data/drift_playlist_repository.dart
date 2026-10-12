@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/storage/database/app_database.dart';
+import '../../../core/storage/database/coalesced_watch.dart';
 import '../../../core/theme/vibe_engine/playlist_vibe_resolver.dart';
 import '../../../core/theme/vibe_engine/vibe_engine.dart';
 import '../domain/playlist_editor_entry.dart';
@@ -51,18 +52,14 @@ class DriftPlaylistRepository implements PlaylistRepository {
   }
 
   /// Deux tables fusionnées (morceaux + titres grisés) : un simple
-  /// `query.watch()` ne suivrait que l'une d'elles. Réémet à chaque
-  /// modification de l'une des tables concernées.
+  /// `query.watch()` ne suivrait que l'une d'elles. Réémet après chaque
+  /// modification de l'une des tables concernées, rafales fusionnées (voir
+  /// [watchCoalesced]).
   @override
-  Stream<List<PlaylistEditorEntry>> watchEditorEntries(String playlistId) async* {
-    yield await _loadEntries(playlistId);
-    final Stream<Set<TableUpdate>> updates = _db.tableUpdates(
-      TableUpdateQuery.onAllTables([_db.playlistTracks, _db.playlistMissingTracks, _db.tracks]),
-    );
-    await for (final _ in updates) {
-      yield await _loadEntries(playlistId);
-    }
-  }
+  Stream<List<PlaylistEditorEntry>> watchEditorEntries(String playlistId) => watchCoalesced(
+        _db.tableUpdates(TableUpdateQuery.onAllTables([_db.playlistTracks, _db.playlistMissingTracks, _db.tracks])),
+        () => _loadEntries(playlistId),
+      );
 
   Future<List<PlaylistEditorEntry>> _loadEntries(String playlistId) async {
     final query = _db.select(_db.playlistTracks).join([

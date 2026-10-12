@@ -16,6 +16,11 @@ import '../../theme/vibe_engine/vibe_engine.dart';
 /// générique stylisé selon la Vibe de la playlist (aucun morceau avec
 /// pochette, ou playlist vide). Toujours carrée — enrober dans un
 /// `AspectRatio(aspectRatio: 1)` si le parent n'impose pas déjà ce ratio.
+///
+/// Images décodées à taille de vignette (Lot 1.1) : en pleine résolution,
+/// chaque carte de Mon espace gardait jusqu'à 4 pochettes HD décodées en
+/// mémoire (~4 à 36 Mo chacune) — la mémoire grimpait avec le nombre de
+/// playlists.
 class PlaylistCoverImage extends StatelessWidget {
   const PlaylistCoverImage({
     super.key,
@@ -26,6 +31,11 @@ class PlaylistCoverImage extends StatelessWidget {
   final Playlist playlist;
   final BorderRadius borderRadius;
 
+  /// Largeur de décodage (px) : PlaylistCard fait 152 dp de large, soit
+  /// 456 px en densité 3x ; une case du composite 2x2, la moitié.
+  static const int _coverDecodeWidth = 512;
+  static const int _tileDecodeWidth = _coverDecodeWidth ~/ 2;
+
   @override
   Widget build(BuildContext context) {
     if (playlist.coverImagePath.isNotEmpty) {
@@ -33,6 +43,7 @@ class PlaylistCoverImage extends StatelessWidget {
         borderRadius: borderRadius,
         child: Image.file(
           File(playlist.coverImagePath),
+          cacheWidth: _coverDecodeWidth,
           semanticLabel: 'Pochette de la playlist ${playlist.title}',
           fit: BoxFit.cover,
           errorBuilder: (context, error, stackTrace) =>
@@ -87,7 +98,7 @@ class _CompositeGrid extends StatelessWidget {
         final ImageProvider image =
             path.startsWith('http') ? NetworkImage(path) : FileImage(File(path)) as ImageProvider;
         return Image(
-          image: image,
+          image: ResizeImage.resizeIfNeeded(PlaylistCoverImage._tileDecodeWidth, null, image),
           fit: BoxFit.cover,
           errorBuilder: (context, error, stackTrace) =>
               ColoredBox(color: Theme.of(context).colorScheme.surfaceContainerHighest),

@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart';
 
 import '../../../core/storage/database/app_database.dart';
+import '../../../core/storage/database/coalesced_watch.dart';
 import '../../../core/storage/metadata_extractor/artist_name_normalizer.dart';
 import '../domain/artist_filter.dart';
 import '../domain/artist_sort.dart';
@@ -18,21 +19,46 @@ class DriftArtistRepository implements ArtistRepository {
     ArtistFilter filter = ArtistFilter.all,
     ArtistSort sort = ArtistSort.chronological,
   }) {
-    // Comparaison insensible à la casse (QA Section 3.A) : [artistName] peut
-    // être le nom canonique choisi par [ArtistNameNormalizer.
-    // dedupeCaseInsensitive] (voir [fetchAllArtistNames]), qui ne correspond
-    // pas forcément exactement (`=`) à CHAQUE variante de casse réellement
-    // stockée dans `track_artists` — un `.equals()` strict manquerait alors
-    // les morceaux tagués sous l'autre variante.
+    return watchCoalesced(
+      _db.tableUpdates(TableUpdateQuery.onAllTables([_db.tracks, _db.trackArtists])),
+      () async => _sort(_filterTracks(await _tracksOfArtist(artistName), filter), sort),
+    );
+  }
+
+  /// [artistName] peut être le nom canonique de [fetchAllArtistNames], qui
+  /// regroupe toutes les variantes de même clé [ArtistNameNormalizer.
+  /// normalizeForGrouping] (casse, espaces, ponctuation : "Jay-Z"/"JAY Z") —
+  /// chaque variante réellement stockée est donc résolue avec cette MÊME clé
+  /// (Lot 2.2). L'ancien `lower(artist_name) = ?` ne couvrait que la casse,
+  /// en ASCII seulement ("CÉLINE DION" ≠ "Céline Dion" pour SQLite) : les
+  /// morceaux des autres variantes étaient omis de "Ajouter par artiste".
+  Future<List<Track>> _tracksOfArtist(String artistName) async {
+    final String key = ArtistNameNormalizer.normalizeForGrouping(artistName);
+    final List<String> variants = [
+      for (final String name in await _distinctArtistNames())
+        if (ArtistNameNormalizer.normalizeForGrouping(name) == key) name,
+    ];
+    if (variants.isEmpty) return const [];
+
     final query = _db.select(_db.tracks).join([
       innerJoin(_db.trackArtists, _db.trackArtists.trackId.equalsExp(_db.tracks.id)),
     ])
-      ..where(_db.trackArtists.artistName.lower().equals(artistName.toLowerCase()));
+      ..where(_db.trackArtists.artistName.isIn(variants));
 
-    return query.watch().map((rows) {
-      final List<Track> tracks = rows.map((row) => row.readTable(_db.tracks)).toList();
-      return _sort(_filterTracks(tracks, filter), sort);
-    });
+    // Un morceau crédité sous deux variantes ("Daft Punk" + "DAFT PUNK")
+    // sort une ligne par variante : une seule entrée par morceau, sans quoi
+    // l'ajout en playlist insérerait deux fois la même clé primaire.
+    final Map<String, Track> byId = {};
+    for (final row in await query.get()) {
+      final Track track = row.readTable(_db.tracks);
+      byId.putIfAbsent(track.id, () => track);
+    }
+    return byId.values.toList();
+  }
+
+  Future<List<String>> _distinctArtistNames() async {
+    final query = _db.selectOnly(_db.trackArtists, distinct: true)..addColumns([_db.trackArtists.artistName]);
+    return [for (final row in await query.get()) row.read(_db.trackArtists.artistName)!];
   }
 
   List<Track> _filterTracks(List<Track> tracks, ArtistFilter filter) {
@@ -63,14 +89,12 @@ class DriftArtistRepository implements ArtistRepository {
 
   @override
   Future<List<String>> fetchAllArtistNames() async {
-    final query = _db.selectOnly(_db.trackArtists, distinct: true)..addColumns([_db.trackArtists.artistName]);
-    final List<TypedResult> rows = await query.get();
-    final List<String> rawNames = rows.map((row) => row.read(_db.trackArtists.artistName)!).toList();
+    final List<String> rawNames = await _distinctArtistNames();
     // QA Section 3.A : un même artiste tagué sous plusieurs casses d'un
     // fichier à l'autre (ex. "ABBA" et "Abba") apparaissait jusqu'ici comme
     // deux entrées distinctes dans "Ajouter par artiste" — une seule entrée
-    // canonique par variante désormais (voir watchArtistTracks pour la
-    // comparaison insensible à la casse qui garde ce choix sûr en aval).
+    // canonique par variante désormais (voir _tracksOfArtist pour la
+    // résolution par clé qui garde ce choix sûr en aval).
     final List<String> names = ArtistNameNormalizer.dedupeCaseInsensitive(rawNames);
     names.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     return names;

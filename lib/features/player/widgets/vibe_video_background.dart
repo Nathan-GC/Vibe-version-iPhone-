@@ -20,6 +20,13 @@ class VibeVideoBackground extends StatefulWidget {
 class _VibeVideoBackgroundState extends State<VibeVideoBackground> {
   VideoPlayerController? _controller;
 
+  /// Chargement le plus récent : un chargement dépassé (changement de
+  /// playlist pendant l'initialisation) ou terminé après la sortie de
+  /// l'écran libère sa vidéo au lieu de l'abandonner (Lot 1.1 : chaque
+  /// contrôleur oublié gardait un décodeur vidéo natif tournant en boucle,
+  /// jusqu'au crash après quelques playlists à fond vidéo).
+  int _loadToken = 0;
+
   @override
   void initState() {
     super.initState();
@@ -33,7 +40,10 @@ class _VibeVideoBackgroundState extends State<VibeVideoBackground> {
   }
 
   Future<void> _load(String path) async {
-    await _controller?.dispose();
+    final int token = ++_loadToken;
+    final VideoPlayerController? previous = _controller;
+    _controller = null;
+    await previous?.dispose();
 
     final VideoPlayerController controller = VideoPlayerController.file(File(path));
     try {
@@ -47,12 +57,16 @@ class _VibeVideoBackgroundState extends State<VibeVideoBackground> {
       // fond reste noir plutôt qu'un crash, comme FluidBackground le fait déjà
       // pour ses propres assets optionnels.
     }
-    if (!mounted) return;
+    if (!mounted || token != _loadToken) {
+      await controller.dispose();
+      return;
+    }
     setState(() => _controller = controller);
   }
 
   @override
   void dispose() {
+    _loadToken++;
     _controller?.dispose();
     super.dispose();
   }

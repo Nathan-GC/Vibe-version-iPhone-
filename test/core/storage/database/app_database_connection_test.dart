@@ -36,4 +36,17 @@ void main() {
 
     expect((await app.customSelect('SELECT COUNT(*) AS n FROM lock_probe').getSingle()).read<int>('n'), 2);
   });
+
+  test('connections use the WAL journal, so a reader never waits for the other connection\'s writer', () async {
+    final Directory dir = await Directory.systemTemp.createTemp('vibe_db_wal');
+    addTearDown(() => dir.delete(recursive: true));
+    final AppDatabase db = AppDatabase.forTesting(
+      NativeDatabase(File('${dir.path}/playlist_app.sqlite'), setup: AppDatabase.configureConnection),
+    );
+    addTearDown(db.close);
+
+    final String mode = (await db.customSelect('PRAGMA journal_mode').getSingle()).read<String>('journal_mode');
+
+    expect(mode, 'wal');
+  });
 }

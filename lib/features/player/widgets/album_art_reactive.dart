@@ -13,7 +13,10 @@ import 'package:flutter/material.dart';
 ///  - `gaplessPlayback` garde l'image précédente affichée pendant le
 ///    décodage d'une nouvelle, au lieu d'un cadre vide intermédiaire ;
 ///  - l'image elle-même vit dans un `RepaintBoundary` : l'animation d'échelle
-///    ou d'ombre au play/pause ne la repeint pas.
+///    ou d'ombre au play/pause ne la repeint pas ;
+///  - décodée à sa taille affichée (Lot 1.1), pas à celle du fichier : une
+///    pochette HD (1000 px via iTunes, jusqu'à 3000 px intégrée au fichier)
+///    pèse 4 à 36 Mo décodée, pour 280 dp à l'écran.
 class AlbumArtReactive extends StatefulWidget {
   const AlbumArtReactive({super.key, required this.imagePath, this.isPlaying = false, this.semanticLabel});
 
@@ -28,21 +31,29 @@ class AlbumArtReactive extends StatefulWidget {
 }
 
 class _AlbumArtReactiveState extends State<AlbumArtReactive> {
+  static const double _size = 280;
+
   String? _cachedPath;
+  int? _cachedWidth;
   ImageProvider? _cachedImage;
 
-  ImageProvider? _imageFor(String? path) {
-    if (path == _cachedPath) return _cachedImage;
+  ImageProvider? _imageFor(String? path, int decodeWidth) {
+    if (path == _cachedPath && decodeWidth == _cachedWidth) return _cachedImage;
     _cachedPath = path;
+    _cachedWidth = decodeWidth;
     _cachedImage = (path == null || path.isEmpty)
         ? null
-        : (path.startsWith('http') ? NetworkImage(path) : FileImage(File(path))) as ImageProvider;
+        : ResizeImage.resizeIfNeeded(
+            decodeWidth,
+            null,
+            (path.startsWith('http') ? NetworkImage(path) : FileImage(File(path))) as ImageProvider,
+          );
     return _cachedImage;
   }
 
   @override
   Widget build(BuildContext context) {
-    final ImageProvider? image = _imageFor(widget.imagePath);
+    final ImageProvider? image = _imageFor(widget.imagePath, (_size * MediaQuery.devicePixelRatioOf(context)).round());
     final bool isPlaying = widget.isPlaying;
     final ColorScheme colors = Theme.of(context).colorScheme;
     // Pas de pochette, ou échec de chargement (hors-ligne, fichier absent) :
@@ -71,8 +82,8 @@ class _AlbumArtReactiveState extends State<AlbumArtReactive> {
             tag: 'album-art',
             child: RepaintBoundary(
               child: Container(
-                width: 280,
-                height: 280,
+                width: _size,
+                height: _size,
                 color: colors.surfaceContainerHighest,
                 child: image == null
                     ? placeholder
