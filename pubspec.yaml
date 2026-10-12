@@ -1,7 +1,7 @@
 name: playlist_app
 description: Lecteur de musique local-first, entièrement personnalisable.
 publish_to: "none"
-version: 1.3.4+11
+version: 1.3.5+12
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -48,6 +48,12 @@ dependencies:
 
   # Hash de fichier pour le cache incrémental du scan plein-appareil (Étape 8)
   crypto: ^3.0.6
+
+  # Normalisation Unicode NFC/NFD (pure Dart, MIT) : "é" précomposé et
+  # "e" + accent combinant (noms de fichiers macOS) donnent la même clé, voir
+  # core/identity/track_match_key.dart. Épinglée : 0.3.3 publiée le
+  # 2026-10-04, trop récente lors de l'ajout (prudence chaîne logistique).
+  unorm_dart: 0.3.2
 
   # Préférences légères (dernier état de lecture, réglages UI)
   shared_preferences: ^2.2.3

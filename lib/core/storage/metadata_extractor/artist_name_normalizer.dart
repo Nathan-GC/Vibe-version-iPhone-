@@ -1,3 +1,7 @@
+import 'package:unorm_dart/unorm_dart.dart' as unorm;
+
+import '../../identity/track_match_key.dart';
+
 /// Scanner/nettoyeur d'artistes, partagé par tous les points d'entrée qui
 /// écrivent un nom d'artiste en base (extraction ID3, correction manuelle) —
 /// évite qu'un même artiste tagué avec des espaces superflus d'un fichier à
@@ -28,18 +32,20 @@ class ArtistNameNormalizer {
   /// [dedupeCaseInsensitive] (dédoublonnage en lecture seule, listes de
   /// sélection) et DriftArtistRepository.watchArtistTracks.
   ///
-  /// Lettres et chiffres de TOUT alphabet conservés (Lot 2.2) : limitée à
-  /// `[a-z0-9]`, la clé effaçait les lettres accentuées ou non latines —
-  /// "宇多田ヒカル" et "아이유" (clé vide), "-M-" et "MØ" (clé "m") étaient
-  /// fusionnés en un seul artiste. Nom sans aucune lettre ni chiffre (ex.
-  /// "!!!") : repli sur le nom lui-même en minuscules, jamais une clé vide.
+  /// Lot 2.2 : insensible aux accents quelle que soit leur forme Unicode
+  /// ("Céline Dion" précomposé ou décomposé, et "Celine Dion" → "celinedion",
+  /// voir [foldDiacritics]) ; lettres de TOUT alphabet conservées, avec leurs
+  /// signes propres (dakuten japonais, voyelles devanagari) — limitée à
+  /// `[a-z0-9]`, la clé fusionnait "宇多田ヒカル" et "아이유" (clé vide), ou
+  /// "-M-" et "MØ". Nom sans lettre ni chiffre (ex. "!!!") : repli sur le nom
+  /// lui-même en minuscules, jamais une clé vide.
   static String normalizeForGrouping(String name) {
-    final String lower = name.toLowerCase();
-    final String key = lower.replaceAll(_nonAlphanumeric, '');
-    return key.isEmpty ? lower.trim() : key;
+    final String folded = foldDiacritics(name);
+    final String key = folded.replaceAll(_nonAlphanumeric, '');
+    return key.isEmpty ? folded.trim() : key;
   }
 
-  static final RegExp _nonAlphanumeric = RegExp(r'[^\p{L}\p{N}]', unicode: true);
+  static final RegExp _nonAlphanumeric = RegExp(r'[^\p{L}\p{M}\p{N}]', unicode: true);
 
   // Permet de retrouver les frontières de mots d'une variante collée
   // ("DaftPunk") quand aucune variante déjà espacée n'existe dans le groupe.
@@ -52,15 +58,26 @@ class ArtistNameNormalizer {
   /// Punk" pourrait produire "Daftpunk" en canonique si la variante collée
   /// gagnait le tri. À défaut, retombe sur la variante en casse mixte
   /// (meilleur indice de frontières de mots) avec un espacement synthétique.
+  ///
+  /// Variantes recomposées en NFC (une écriture NFD du même nom n'est pas une
+  /// variante de plus), et à longueur égale la plus accentuée l'emporte : une
+  /// fusion ne remplace jamais "Céline Dion" par "Celine Dion".
   static String pickCanonical(Set<String> variants) {
-    final Iterable<String> spaced = variants.where((v) => v.contains(' '));
-    if (spaced.isNotEmpty) {
-      return toTitleCase(spaced.reduce((a, b) => b.length > a.length ? b : a));
-    }
+    final Set<String> composed = {for (final String v in variants) unorm.nfc(v)};
+    final Iterable<String> spaced = composed.where((v) => v.contains(' '));
+    if (spaced.isNotEmpty) return toTitleCase(spaced.reduce(_richer));
 
-    final Iterable<String> mixedCase = variants.where((v) => v != v.toUpperCase() && v != v.toLowerCase());
-    final String source = (mixedCase.isNotEmpty ? mixedCase : variants).reduce((a, b) => b.length > a.length ? b : a);
+    final Iterable<String> mixedCase = composed.where((v) => v != v.toUpperCase() && v != v.toLowerCase());
+    final String source = (mixedCase.isNotEmpty ? mixedCase : composed).reduce(_richer);
     return toTitleCase(source.replaceAllMapped(_camelCaseBoundary, (m) => ' '));
+  }
+
+  /// La plus longue ; à longueur égale, celle qui compte le plus de lettres
+  /// non ASCII (accentuées).
+  static String _richer(String a, String b) {
+    if (a.length != b.length) return b.length > a.length ? b : a;
+    int nonAscii(String s) => s.runes.where((rune) => rune > 0x7f).length;
+    return nonAscii(b) > nonAscii(a) ? b : a;
   }
 
   static String toTitleCase(String value) {

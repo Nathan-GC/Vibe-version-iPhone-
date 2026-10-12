@@ -67,7 +67,20 @@ void main() {
     expect(t2!.artists, ['Justice']);
   });
 
-  test('never merges distinct artists whose names only differ by non-ASCII letters', () async {
+  test('merges accent and Unicode-form variants under the accented spelling', () async {
+    await _insertTrack(db, id: 't1', artists: ['Celine Dion']);
+    await _insertTrack(db, id: 't2', artists: ['Céline Dion']); // NFC
+    await _insertTrack(db, id: 't3', artists: ['Céline Dion']); // NFD
+
+    final int merged = await repository.mergeDuplicateCaseArtists();
+
+    expect(merged, 1);
+    for (final String id in ['t1', 't2', 't3']) {
+      expect((await repository.findById(id))!.artists, ['Céline Dion'], reason: id);
+    }
+  });
+
+  test('never merges distinct artists written in non-Latin scripts or sharing one ASCII letter', () async {
     // Clé de regroupement autrefois limitée à [a-z0-9] : ces noms tombaient
     // tous sur la même clé ("" ou "m") et étaient fusionnés en un seul artiste.
     await _insertTrack(db, id: 't1', artists: ['宇多田ヒカル']);

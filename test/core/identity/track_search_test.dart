@@ -21,6 +21,12 @@ void main() {
     expect(matches('ete', title: 'Été indien', artists: const ['Joe Dassin']), isTrue);
   });
 
+  test('finds a track tagged in decomposed Unicode (NFD, e.g. macOS file names)', () {
+    // "Céline Dion" écrit "e" + accent aigu combinant (U+0301).
+    expect(matches('celine', title: 'Pour que tu m\'aimes encore', artists: const ['Céline Dion']), isTrue);
+    expect(matches('Céline', title: 'Pour que tu m\'aimes encore', artists: const ['Céline Dion']), isTrue);
+  });
+
   test('every word must match, in any order, across title and artists', () {
     expect(matches('love beyonce'), isTrue);
     expect(matches('love adele'), isFalse);

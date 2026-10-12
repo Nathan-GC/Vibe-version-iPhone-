@@ -8,27 +8,42 @@
 /// doivent produire exactement la même clé.
 library;
 
-const String _accented = 'àáâãäåāçćčèéêëēėęìíîïīñńòóôõöøōùúûüūýÿžźżšśß';
-const String _plain = 'aaaaaaaccceeeeeeeiiiiinnooooooouuuuuyyzzzsss';
+import 'package:unorm_dart/unorm_dart.dart' as unorm;
 
-/// Minuscules, accents retirés ("Beyoncé" -> "beyonce"), `œ`/`æ` décomposés.
+final RegExp _ascii = RegExp(r'^[\x00-\x7f]*$');
+
+/// Accents latins, grecs et cyrilliques que la décomposition NFD sépare de
+/// leur lettre de base (bloc U+0300–U+036F). Les signes propres à d'autres
+/// écritures (dakuten japonais, voyelles devanagari…) n'en font pas partie.
+final RegExp _combiningDiacritics = RegExp('[̀-ͯ]');
+
+/// Lettres sans décomposition Unicode, pliées à la main.
+final RegExp _undecomposable = RegExp('[œæøßłđ]');
+const Map<String, String> _undecomposableFolds = {'œ': 'oe', 'æ': 'ae', 'ø': 'o', 'ß': 's', 'ł': 'l', 'đ': 'd'};
+
+/// Minuscules, accents retirés ("Beyoncé" -> "beyonce"), `œ`/`æ` décomposés —
+/// à l'identique que le texte soit précomposé ("é", NFC) ou décomposé ("e" +
+/// accent combinant, NFD : noms de fichiers créés sur macOS…). Lot 2.2 :
+/// l'ancienne table ne connaissait que les lettres précomposées courantes,
+/// deux écritures du même nom ne se rapprochaient donc pas (recherche,
+/// ajout par artiste, rapprochement des imports JSON). Les autres écritures
+/// (japonais, coréen…) sont conservées, recomposées en NFC.
 String foldDiacritics(String input) {
-  final StringBuffer buffer = StringBuffer();
-  for (final int rune in input.toLowerCase().runes) {
-    final String char = String.fromCharCode(rune);
-    if (char == 'œ') {
-      buffer.write('oe');
-      continue;
-    }
-    if (char == 'æ') {
-      buffer.write('ae');
-      continue;
-    }
-    final int index = _accented.indexOf(char);
-    buffer.write(index == -1 ? char : _plain[index]);
-  }
-  return buffer.toString();
+  final String lower = input.toLowerCase();
+  // Texte ASCII, le cas courant : rien à normaliser.
+  if (_ascii.hasMatch(lower)) return lower;
+  if (_foldCache.length >= _foldCacheLimit) _foldCache.clear();
+  return _foldCache.putIfAbsent(lower, () {
+    final String stripped = unorm.nfc(unorm.nfd(lower).replaceAll(_combiningDiacritics, ''));
+    return stripped.replaceAllMapped(_undecomposable, (match) => _undecomposableFolds[match[0]]!);
+  });
 }
+
+// ponytail: mémo plafonné, vidé d'un bloc au-delà de la limite — la
+// recherche replie les mêmes titres à chaque frappe, et normaliser un texte
+// accentué coûte ~20 µs (0,4 µs en ASCII). LRU si la limite devient gênante.
+final Map<String, String> _foldCache = {};
+const int _foldCacheLimit = 20000;
 
 final RegExp _bracketed = RegExp(r'\([^)]*\)|\[[^\]]*\]');
 final RegExp _featTail = RegExp(r'\s(feat|ft|featuring)\b.*$');

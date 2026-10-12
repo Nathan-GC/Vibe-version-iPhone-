@@ -153,6 +153,11 @@ class PlayerController extends _$PlayerController {
   /// iOS : AVFoundation ne reprend jamais seul, la reprise passe par la même
   /// règle (fin d'interruption avec `shouldResume`) ; lecture écran verrouillé
   /// et interrupteur silencieux via `UIBackgroundModes: audio` (Info.plist).
+  ///
+  /// `androidWillPauseWhenDucked` reste à `false` (défaut de `music()`,
+  /// arbitrage v1.3.5) : Android 8+ baisse puis remonte lui-même le volume
+  /// sous une notification, sans couper la lecture. À `true`, `audio_session`
+  /// transforme ce signal en PAUSE : coupure à chaque notification.
   Future<void> _configureAudioSession() async {
     final AudioSession session = await AudioSession.instance;
     await session.configure(const AudioSessionConfiguration.music());
