@@ -47,7 +47,11 @@ const int _foldCacheLimit = 20000;
 
 final RegExp _bracketed = RegExp(r'\([^)]*\)|\[[^\]]*\]');
 final RegExp _featTail = RegExp(r'\s(feat|ft|featuring)\b.*$');
-final RegExp _nonAlphanumeric = RegExp(r'[^a-z0-9]+');
+// Lettres de TOUT alphabet (et leurs signes), chiffres — même règle que
+// buildSanitizedKey et ArtistNameNormalizer. Limitée à `[a-z0-9]`, la clé
+// vidait les titres cyrilliques, asiatiques ou arabes : deux titres d'un même
+// artiste s'y confondaient (dégrisage, import JSON). Clé inchangée en ASCII.
+final RegExp _nonAlphanumeric = RegExp(r'[^\p{L}\p{M}\p{N}]+', unicode: true);
 
 String _collapse(String input) => input.replaceAll(_nonAlphanumeric, ' ').trim().replaceAll(RegExp(r'\s+'), ' ');
 

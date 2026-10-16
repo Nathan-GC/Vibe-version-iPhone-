@@ -161,4 +161,37 @@ void main() {
         filePath: '/m/x.mp3', title: 'X', artists: const ['A'], reason: BlacklistReason.manual, trackSnapshot: '{}'));
     expect(await upgraded.select(upgraded.blacklistedTracks).get(), hasLength(1));
   });
+
+  test('upgrading from v17 recomputes the keys of greyed titles, non-Latin ones included', () async {
+    final AppDatabase legacy = AppDatabase.forTesting(NativeDatabase(dbFile));
+    await legacy.into(legacy.playlists).insert(PlaylistsCompanion.insert(id: 'p', title: 'Mix'));
+    // Clés telles que les écrivait la v1.3.5 : lettres non latines purgées.
+    await legacy.into(legacy.playlistMissingTracks).insert(PlaylistMissingTracksCompanion.insert(
+        playlistId: 'p',
+        position: 0,
+        title: '夜に駆ける',
+        artist: 'YOASOBI',
+        sanitizedKey: '__yoasobi',
+        matchKey: '|yoasobi'));
+    await legacy.into(legacy.playlistMissingTracks).insert(PlaylistMissingTracksCompanion.insert(
+        playlistId: 'p',
+        position: 1,
+        title: 'One More Time',
+        artist: 'Daft Punk',
+        album: const Value('Discovery'),
+        sanitizedKey: 'one-more-time_discovery_daft-punk',
+        matchKey: 'one more time|daft punk'));
+    await legacy.customStatement('PRAGMA user_version = 17');
+    await legacy.close();
+
+    final AppDatabase upgraded = AppDatabase.forTesting(NativeDatabase(dbFile));
+    addTearDown(upgraded.close);
+
+    final List<PlaylistMissingTrack> rows =
+        await (upgraded.select(upgraded.playlistMissingTracks)..orderBy([(m) => OrderingTerm.asc(m.position)])).get();
+    expect(rows.map((m) => (m.sanitizedKey, m.matchKey)), [
+      ('夜に駆ける__yoasobi', '夜に駆ける|yoasobi'),
+      ('one-more-time_discovery_daft-punk', 'one more time|daft punk'),
+    ]);
+  });
 }

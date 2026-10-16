@@ -120,9 +120,9 @@ class BlacklistRepository {
   /// artiste principal (clé de rapprochement des imports JSON) — un import
   /// manuel demande alors s'il faut restaurer le titre.
   Future<BlacklistedTrack?> findMatch(ScannedTrack file) async {
-    // Clé titre + artiste limitée à [a-z0-9] : vide pour un titre ou un
-    // artiste non latin, elle confondrait alors tous les titres de cette
-    // écriture — seuls le chemin et la clé `tracks.id` comptent ici.
+    // Titre ou artiste vide une fois normalisé (ponctuation seule, titre
+    // entièrement entre parenthèses) : la clé titre + artiste confondrait
+    // tous ces titres — seuls le chemin et la clé `tracks.id` comptent alors.
     final String? matchKey = normalizeTrackTitle(file.title).isEmpty || normalizeArtistName(file.primaryArtist).isEmpty
         ? null
         : buildTrackMatchKey(title: file.title, artist: file.primaryArtist);

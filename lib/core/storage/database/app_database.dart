@@ -6,6 +6,8 @@ import 'package:path_provider/path_provider.dart' show getApplicationSupportDire
 import 'package:sqlite3/common.dart' show CommonDatabase;
 
 import '../../platform/app_platform.dart';
+import '../../identity/track_key.dart';
+import '../../identity/track_match_key.dart';
 import '../../theme/vibe_engine/vibe_engine.dart';
 
 part 'app_database.g.dart';
@@ -290,7 +292,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 17;
+  int get schemaVersion => 18;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -408,6 +410,29 @@ class AppDatabase extends _$AppDatabase {
             // Liste noire (v1.3.6) : nouvelle table, aucune donnée existante
             // touchée.
             await m.createTable(blacklistedTracks);
+          }
+          if (from < 18) {
+            // Clés des titres grisés (v1.3.6) : `buildSanitizedKey` et
+            // `buildTrackMatchKey` gardent désormais les lettres de tout
+            // alphabet. Recalculées depuis le titre, l'album et l'artiste
+            // stockés — les anciennes clés vides des titres non latins
+            // dégrisaient n'importe quel titre du même artiste. Données
+            // seules, aucun changement de schéma.
+            final List<QueryRow> rows =
+                await customSelect('SELECT id, title, artist, album FROM playlist_missing_tracks').get();
+            for (final QueryRow row in rows) {
+              final String title = row.read<String>('title');
+              final String artist = row.read<String>('artist');
+              await customUpdate(
+                'UPDATE playlist_missing_tracks SET sanitized_key = ?, match_key = ? WHERE id = ?',
+                variables: [
+                  Variable.withString(
+                      buildSanitizedKey(title: title, album: row.read<String>('album'), primaryArtist: artist)),
+                  Variable.withString(buildTrackMatchKey(title: title, artist: artist)),
+                  Variable.withInt(row.read<int>('id')),
+                ],
+              );
+            }
           }
         },
       );
