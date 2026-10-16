@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/audio_engine/player_controller.dart';
+import '../../../core/purge/orphan_purge_service.dart';
 import '../../../core/purge/orphan_track.dart';
 import '../../../core/purge/purge_providers.dart';
+import '../../../core/shared/widgets/local_track_file_actions.dart';
 import '../../../core/storage/database/app_database.dart';
 import 'orphan_cleanup_providers.dart';
 
@@ -75,6 +78,8 @@ class OrphanCleanupScreen extends ConsumerWidget {
   ) async {
     final List<OrphanTrack> toDelete = allOrphans.where((o) => selectedIds.contains(o.track.id)).toList();
     final double totalMb = toDelete.fold(0.0, (sum, o) => sum + o.fileSizeMb);
+    final PlayerController player = ref.read(playerControllerProvider.notifier);
+    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
 
     final bool? confirmed = await showDialog<bool>(
       context: context,
@@ -96,9 +101,21 @@ class OrphanCleanupScreen extends ConsumerWidget {
     );
     if (confirmed != true) return;
 
-    await ref.read(orphanPurgeServiceProvider).deleteTracks(toDelete.map((o) => o.track).toList());
+    final PurgeResult result =
+        await ref.read(orphanPurgeServiceProvider).deleteTracks(toDelete.map((o) => o.track).toList());
+    await player.removeTracks(result.removedIds);
     ref.read(selectedOrphanIdsProvider.notifier).set({});
     ref.invalidate(orphanTracksProvider);
+    // Fichiers protégés par le système : retirés quand même, en liste noire.
+    final int protected = result.blacklisted.length;
+    if (protected > 0) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(protected == 1
+            ? kProtectedFileBlacklistedMessage
+            : '$protected fichiers physiques protégés par le système : les titres ont été retirés et ajoutés '
+                'à la liste noire de Vibe.'),
+      ));
+    }
   }
 }
 

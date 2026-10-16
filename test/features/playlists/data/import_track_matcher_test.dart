@@ -73,11 +73,21 @@ void main() {
     await addTrack('Halo', 'Beyoncé', album: 'I Am... Sasha Fierce');
     await addTrack('Halo', 'Beyoncé', album: 'Live at Wynn');
 
+    // "(Live)" : clé différente, seul l'album départage les deux versions.
     final ImportMatchPlan result =
-        await plan(const [ManifestTrackRef(title: 'Halo', artist: 'Beyonce', album: 'Live at Wynn')]);
+        await plan(const [ManifestTrackRef(title: 'Halo (Live)', artist: 'Beyonce', album: 'Live at Wynn')]);
 
     expect(result.entries.single.status, ImportMatchStatus.confident);
     expect(result.entries.single.match?.album, 'Live at Wynn');
+  });
+
+  test('accents no longer change the key: "Beyonce" finds "Beyoncé" as an exact match (P4)', () async {
+    await addTrack('Halo', 'Beyoncé', album: 'Live at Wynn');
+
+    final ImportMatchPlan result =
+        await plan(const [ManifestTrackRef(title: 'Halo', artist: 'Beyonce', album: 'Live at Wynn')]);
+
+    expect(result.entries.single.status, ImportMatchStatus.exact);
   });
 
   test('the same title by another artist is never associated automatically', () async {

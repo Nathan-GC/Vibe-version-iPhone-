@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:playlist_app/core/audio_engine/player_controller.dart';
+import 'package:playlist_app/core/audio_engine/queue_controller.dart';
 import 'package:playlist_app/core/audio_engine/playlist_audio_handler.dart';
 import 'package:playlist_app/core/storage/database/app_database.dart';
 import 'package:playlist_app/core/storage/database/database_provider.dart';
@@ -395,6 +396,54 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expect(audio.playing, isFalse);
+    });
+  });
+
+  group('tracks leaving the library (deletion, blacklist)', () {
+    late PlayerController player;
+    List<String> queueIds() => container.read(queueControllerProvider);
+
+    setUp(() => player = container.read(playerControllerProvider.notifier));
+
+    test('removing the playing track moves on to the next remaining one, still playing', () async {
+      await player.playPlaylist('p', tracks, startIndex: 2);
+
+      await player.removeTracks({'t2'});
+
+      expect(currentId(), 't3');
+      expect(audio.loaded, pathOf(3), reason: 'le moteur ne lit plus jamais le morceau retiré');
+      expect(audio.playing, isTrue);
+      expect(queueIds(), isNot(contains('t2')));
+    });
+
+    test('a paused track that is removed gives way to the next one, left paused', () async {
+      await player.pause();
+
+      await player.removeTracks({'t5'});
+
+      expect(currentId(), 't0', reason: 'dernier de la file retiré : on repart du début');
+      expect(audio.playing, isFalse);
+      expect(container.read(playerControllerProvider).status, PlaybackStatus.paused);
+    });
+
+    test('removing other tracks keeps the current one and next/previous stay consistent', () async {
+      await player.playPlaylist('p', tracks, startIndex: 3);
+
+      await player.removeTracks({'t0', 't1'});
+      expect(currentId(), 't3');
+      unawaited(player.next());
+      await settle();
+
+      expect(currentId(), 't4');
+      expect(audio.loaded, pathOf(4));
+    });
+
+    test('emptying the queue stops playback', () async {
+      await player.removeTracks({for (final Track t in tracks) t.id});
+
+      expect(container.read(playerControllerProvider).status, PlaybackStatus.idle);
+      expect(currentId(), isNull);
+      expect(audio.stops, 1);
     });
   });
 

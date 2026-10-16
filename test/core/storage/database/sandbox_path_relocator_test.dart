@@ -2,6 +2,7 @@ import 'package:drift/drift.dart' hide isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:playlist_app/core/storage/database/app_database.dart';
+import 'package:playlist_app/core/storage/database/blacklist_repository.dart';
 import 'package:playlist_app/core/storage/database/sandbox_path_relocator.dart';
 import 'package:playlist_app/core/storage/database/track_repository.dart';
 import 'package:playlist_app/core/storage/scanner/scanned_track.dart';
@@ -83,6 +84,18 @@ void main() {
       expect(playlist.coverImagePath, '$_newRoot/Documents/Music/AppFolder/playlist_covers/p1.jpg');
       expect(playlist.customBackgroundImagePath, '$_newRoot/Documents/Music/AppFolder/vibe_backgrounds/p1.png');
       expect(playlist.customBackgroundVideoPath, '$_newRoot/Documents/Music/AppFolder/vibe_backgrounds/p1.mov');
+    });
+
+    test('moves blacklisted files too, so an app update never re-imports them', () async {
+      await insertTrack('a', '$_oldRoot/Documents/a.mp3');
+      final Track track = await (db.select(db.tracks)..where((t) => t.id.equals('a'))).getSingle();
+      await BlacklistRepository(db).blacklist([track], reason: BlacklistReason.manual);
+
+      await SandboxPathRelocator(db).relocateTo(_newRoot);
+
+      expect(await repository.isBlacklisted(filePath: '$_newRoot/Documents/a.mp3'), isTrue);
+      await insertTrack('a', '$_newRoot/Documents/a.mp3'); // synchro du dossier Fichiers après la mise à jour
+      expect(await repository.findById('a'), isNull);
     });
 
     test('is idempotent: a second pass changes nothing', () async {

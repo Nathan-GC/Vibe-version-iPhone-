@@ -134,10 +134,13 @@ class _DuplicateTrackRow extends ConsumerWidget {
 
   Future<void> _delete(BuildContext context, WidgetRef ref) async {
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
-    final bool deleted = await confirmAndDeleteLocalTrackFile(context, ref, track);
+    final TrackFileDeletion outcome = await confirmAndDeleteLocalTrackFile(context, ref, track);
     // Le groupe se met à jour tout seul (flux Drift de
     // duplicateTrackGroupsProvider) : la ligne, voire la carte entière si un
-    // seul exemplaire reste, disparaît d'elle-même.
-    if (deleted) messenger.showSnackBar(SnackBar(content: Text('« ${track.title} » supprimé de l\'appareil.')));
+    // seul exemplaire reste, disparaît d'elle-même. Fichier protégé :
+    // confirmAndDeleteLocalTrackFile a déjà expliqué la mise en liste noire.
+    if (outcome == TrackFileDeletion.deleted) {
+      messenger.showSnackBar(SnackBar(content: Text('« ${track.title} » supprimé de l\'appareil.')));
+    }
   }
 }

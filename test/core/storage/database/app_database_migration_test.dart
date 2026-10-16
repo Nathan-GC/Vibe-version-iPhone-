@@ -143,4 +143,22 @@ void main() {
       expect(track.enrichmentStatus, EnrichmentStatus.enrichedManualEdit);
     });
   });
+
+  test('upgrading from v16 adds the blacklist table without touching existing data', () async {
+    // Base "v16" : schéma actuel moins la liste noire, user_version ramené à 16.
+    final AppDatabase legacy = AppDatabase.forTesting(NativeDatabase(dbFile));
+    await legacy.into(legacy.tracks).insert(TracksCompanion.insert(
+        id: 't1', title: 'Kept', album: '', artists: const ['A'], durationSeconds: 180, filePath: '/m/t1.mp3'));
+    await legacy.customStatement('DROP TABLE blacklisted_tracks');
+    await legacy.customStatement('PRAGMA user_version = 16');
+    await legacy.close();
+
+    final AppDatabase upgraded = AppDatabase.forTesting(NativeDatabase(dbFile));
+    addTearDown(upgraded.close);
+
+    expect((await upgraded.select(upgraded.tracks).get()).map((t) => t.title), ['Kept']);
+    await upgraded.into(upgraded.blacklistedTracks).insert(BlacklistedTracksCompanion.insert(
+        filePath: '/m/x.mp3', title: 'X', artists: const ['A'], reason: BlacklistReason.manual, trackSnapshot: '{}'));
+    expect(await upgraded.select(upgraded.blacklistedTracks).get(), hasLength(1));
+  });
 }

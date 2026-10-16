@@ -4,10 +4,13 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/shared/widgets/blacklisted_import_dialog.dart';
 import '../../../../core/shared/widgets/local_track_picker_sheet.dart';
 import '../../../../core/storage/database/app_database.dart';
+import '../../../../core/storage/scanner/audio_import_pipeline.dart';
 import '../../../../core/storage/storage_manager/picked_file_cache.dart';
 import '../../../diff/data/diff_providers.dart';
+import '../../../diff/data/missing_track_resolver.dart';
 import '../../domain/import_match_plan.dart';
 
 /// Fenêtre de matching manuel d'un import JSON : ouverte uniquement quand le
@@ -108,9 +111,17 @@ class _ImportMatchingScreenState extends ConsumerState<ImportMatchingScreen> {
     if (path == null || !mounted) return;
 
     setState(() => _importingIndex = entry.index);
+    final MissingTrackResolver resolver = ref.read(missingTrackResolverProvider);
     Track? imported;
+    bool keptHidden = false;
     try {
-      imported = await ref.read(missingTrackResolverProvider).importFromDevice(File(path));
+      try {
+        imported = await resolver.importFromDevice(File(path));
+      } on BlacklistedImportException catch (blocked) {
+        // Titre en liste noire : importé seulement si l'utilisateur le restaure.
+        keptHidden = !mounted || !await confirmRestoreBlacklisted(context, blocked.entry);
+        if (!keptHidden) imported = await resolver.restoreFromDevice(File(path), blocked.entry);
+      }
     } catch (_) {
       imported = null;
     } finally {
@@ -120,6 +131,10 @@ class _ImportMatchingScreenState extends ConsumerState<ImportMatchingScreen> {
     if (!mounted) return;
     setState(() => _importingIndex = null);
 
+    if (keptHidden) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Titre laissé en liste noire.')));
+      return;
+    }
     if (imported == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Fichier trop court ou illisible.')));
       return;

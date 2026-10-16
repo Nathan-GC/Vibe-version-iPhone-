@@ -252,14 +252,45 @@ class PlaylistMissingTracks extends Table {
   TextColumn get matchKey => text()();
 }
 
-@DriftDatabase(tables: [Tracks, Playlists, PlaylistTracks, TrackArtists, PlaylistMissingTracks])
+/// Motif de mise en liste noire (voir [BlacklistedTracks]).
+enum BlacklistReason {
+  /// Suppression du fichier refusée par le système (stockage cloisonné
+  /// Android, fichier en lecture seule…).
+  deletionFailed,
+
+  /// Masqué volontairement depuis la page Import.
+  manual,
+}
+
+/// Liste noire (v17) : fichiers audio que Vibe ne doit plus jamais indexer ni
+/// lire. Y mettre un morceau SUPPRIME sa ligne de [Tracks] et ses liaisons :
+/// bibliothèque, recherche, classements, playlists et file de lecture ne
+/// peuvent donc plus le voir, sans filtre à maintenir dans chaque requête —
+/// seuls le scan et l'import consultent cette table
+/// (`TrackRepository.isBlacklisted`). [trackSnapshot] garde la ligne
+/// complète (JSON, voir BlacklistRepository) pour une restauration à
+/// l'identique, métadonnées enrichies comprises.
+@DataClassName('BlacklistedTrack')
+class BlacklistedTracks extends Table {
+  TextColumn get filePath => text()();
+  TextColumn get title => text()();
+  TextColumn get artists => text().map(const StringListConverter())();
+  TextColumn get reason => textEnum<BlacklistReason>()();
+  DateTimeColumn get blacklistedAt => dateTime().withDefault(currentDateAndTime)();
+  TextColumn get trackSnapshot => text()();
+
+  @override
+  Set<Column> get primaryKey => {filePath};
+}
+
+@DriftDatabase(tables: [Tracks, Playlists, PlaylistTracks, TrackArtists, PlaylistMissingTracks, BlacklistedTracks])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 16;
+  int get schemaVersion => 17;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -372,6 +403,11 @@ class AppDatabase extends _$AppDatabase {
               "enrichment_status = CASE WHEN requires_user_review = 1 THEN 'requiresReview' ELSE 'pending' END "
               "WHERE cover_art_path LIKE 'http%' AND (cover_art_path LIKE '%ytimg.com%' OR cover_art_path LIKE '%youtube%')",
             );
+          }
+          if (from < 17) {
+            // Liste noire (v1.3.6) : nouvelle table, aucune donnée existante
+            // touchée.
+            await m.createTable(blacklistedTracks);
           }
         },
       );

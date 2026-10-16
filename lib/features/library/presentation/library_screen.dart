@@ -6,10 +6,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/platform/app_platform.dart';
+import '../../../core/shared/widgets/blacklisted_import_dialog.dart';
 import '../../../core/shared/widgets/enrichment_source_dialog.dart';
 import '../../../core/shared/widgets/library_category_picker.dart';
 import '../../../core/shared/widgets/track_actions_sheet.dart';
 import '../../../core/storage/database/app_database.dart';
+import '../../../core/storage/database/blacklist_repository.dart';
 import '../../../core/storage/database/duplicate_track_group.dart';
 import '../../../core/storage/database/library_category.dart';
 import '../../../core/storage/database/track_enricher.dart';
@@ -52,12 +54,16 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         storageManager: ref.read(storageManagerServiceProvider),
         scanService: ref.read(libraryScanServiceProvider),
         trackRepository: ref.read(trackRepositoryProvider),
+        blacklistRepository: ref.read(blacklistRepositoryProvider),
       );
 
       int imported = 0;
       int tooShort = 0;
       int failed = 0;
+      int restored = 0;
+      int keptHidden = 0;
       String? lastError;
+      final List<(String, BlacklistedTrack)> blacklisted = [];
       // Renommés (repli FilenameSanitizer, pas de tag ID3 exploitable) parmi
       // ce lot — seuls ceux-là seront enrichis automatiquement juste après,
       // une fois TOUS les fichiers du lot renommés et persistés (phase 1
@@ -77,6 +83,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             } else {
               tooShort++;
             }
+          } on BlacklistedImportException catch (blocked) {
+            blacklisted.add((path, blocked.entry));
           } catch (error) {
             // Distingué de "trop court" : un import qui échoue (stockage,
             // permission, fichier corrompu...) doit rester visible plutôt que
@@ -92,6 +100,25 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
 
         if (mounted) {
           setState(() => _statusMessage = 'Import ${i + 1} / ${picked.length}...');
+        }
+      }
+
+      // Titres en liste noire : jamais réimportés sans l'accord explicite de
+      // l'utilisateur, demandé une fois le reste du lot importé.
+      for (final (String path, BlacklistedTrack entry) in blacklisted) {
+        if (!mounted || !await confirmRestoreBlacklisted(context, entry)) {
+          keptHidden++;
+          continue;
+        }
+        try {
+          if (await pipeline.restoreBlacklisted(File(path), entry) != null) {
+            restored++;
+          } else {
+            tooShort++;
+          }
+        } catch (error) {
+          failed++;
+          lastError = error.toString();
         }
       }
 
@@ -122,6 +149,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       if (!mounted) return;
       final String summary = [
         '$imported importé(s)',
+        if (restored > 0) '$restored restauré(s)',
+        if (keptHidden > 0) '$keptHidden laissé(s) en liste noire',
         if (renamedTracks.isNotEmpty)
           autoEnrich ? '$enriched/${renamedTracks.length} renommé(s) enrichi(s)' : 'enrichissement auto désactivé',
         if (tooShort > 0) '$tooShort trop court(s) ou illisible(s)',

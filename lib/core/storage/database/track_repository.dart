@@ -26,6 +26,10 @@ final Provider<TrackRepository> trackRepositoryProvider = Provider<TrackReposito
 /// features/playlists/data/playlist_repository.dart).
 const String kAllImportedPlaylistId = 'all-imported-tracks';
 
+/// Appartenance d'un morceau à une playlist, mémorisée à sa mise en liste
+/// noire pour l'y remettre à l'identique (BlacklistRepository.restore).
+typedef PlaylistLink = ({String playlistId, int position, bool isPendingPlacement});
+
 /// Écrit un [ScannedTrack] en base et tient `track_artists` synchronisé avec
 /// le tableau `artists` de la track — c'est ce qui permet à un morceau en
 /// featuring d'apparaître dans le profil de chaque artiste sans dupliquer le
@@ -88,7 +92,100 @@ class TrackRepository {
     );
   }
 
-  Future<void> upsertTrack(ScannedTrack scanned) {
+  /// En liste noire ([BlacklistedTracks]) : jamais réindexé, que ce soit
+  /// par le scan plein-appareil, le dossier Fichiers (iOS) ou un import.
+  /// Reconnu par son chemin, ou par sa clé [trackKey] (`tracks.id`) : sur
+  /// Android, un fichier choisi via le sélecteur n'est connu que par une
+  /// copie en cache, seule son identité permet de le reconnaître ensuite.
+  /// La clé est lue dans l'instantané JSON (format courant `trackKey`, ou
+  /// `id` de la ligne seule des premiers instantanés).
+  Future<bool> isBlacklisted({required String filePath, String? trackKey}) async {
+    final QueryRow? row = await _db.customSelect(
+      'SELECT 1 FROM blacklisted_tracks WHERE file_path = ?1 OR (?2 IS NOT NULL AND '
+      "(json_extract(track_snapshot, '\$.trackKey') = ?2 OR json_extract(track_snapshot, '\$.id') = ?2)) LIMIT 1",
+      variables: [Variable.withString(filePath), Variable<String>(trackKey)],
+      readsFrom: {_db.blacklistedTracks},
+    ).getSingleOrNull();
+    return row != null;
+  }
+
+  /// Retire des morceaux de Vibe : ligne `tracks`, index d'artistes et
+  /// liaisons de playlists — sans quoi un morceau retiré laisserait une ligne
+  /// fantôme dans "Tous les titres importés" (masquée par les jointures
+  /// internes, mais comptée dans les positions de la playlist). Partagé par
+  /// la suppression de fichier (OrphanPurgeService) et la liste noire.
+  Future<void> removeFromLibrary(List<String> trackIds) async {
+    if (trackIds.isEmpty) return;
+    await _db.transaction(() async {
+      await (_db.delete(_db.playlistTracks)..where((t) => t.trackId.isIn(trackIds))).go();
+      await (_db.delete(_db.trackArtists)..where((t) => t.trackId.isIn(trackIds))).go();
+      await (_db.delete(_db.tracks)..where((t) => t.id.isIn(trackIds))).go();
+    });
+  }
+
+  /// Remet en bibliothèque une ligne complète sortie de la liste noire
+  /// (BlacklistRepository.restore) : métadonnées enrichies, compteur
+  /// d'écoutes et pochette conservés ; index d'artistes, playlists d'origine
+  /// aux positions d'origine ([playlists]), "Tous les titres importés" et
+  /// dégrisage des playlists importées, comme à l'import.
+  Future<void> restoreTrack(Track track, {List<PlaylistLink> playlists = const []}) {
+    return _db.transaction(() async {
+      await _db.into(_db.tracks).insert(track);
+      await _db.batch((batch) {
+        batch.insertAll(_db.trackArtists, [
+          for (int i = 0; i < track.artists.length; i++)
+            TrackArtistsCompanion.insert(trackId: track.id, artistName: track.artists[i], position: i),
+        ]);
+      });
+      for (final PlaylistLink link in playlists) {
+        await _reinsertAt(track.id, link);
+      }
+      await _linkToAllImportedPlaylist(track.id);
+      await MissingPlaylistTrackReconciler(_db).reconcileTrack(
+        trackId: track.id,
+        title: track.title,
+        artists: track.artists,
+      );
+    });
+  }
+
+  /// Réinsère [trackId] à sa position d'origine dans une playlist qui existe
+  /// encore. Position reprise entre-temps (playlist réordonnée puis
+  /// enregistrée) : la suite est décalée d'un cran, titres grisés compris
+  /// (numérotation commune, voir [PlaylistMissingTracks]).
+  Future<void> _reinsertAt(String trackId, PlaylistLink link) async {
+    final Playlist? playlist =
+        await (_db.select(_db.playlists)..where((p) => p.id.equals(link.playlistId))).getSingleOrNull();
+    if (playlist == null) return;
+
+    final bool taken = await (_db.select(_db.playlistTracks)
+              ..where((t) => t.playlistId.equals(link.playlistId) & t.position.equals(link.position)))
+            .get()
+            .then((rows) => rows.isNotEmpty) ||
+        await (_db.select(_db.playlistMissingTracks)
+              ..where((m) => m.playlistId.equals(link.playlistId) & m.position.equals(link.position)))
+            .get()
+            .then((rows) => rows.isNotEmpty);
+    if (taken) {
+      for (final String table in const ['playlist_tracks', 'playlist_missing_tracks']) {
+        await _db.customUpdate(
+          'UPDATE $table SET position = position + 1 WHERE playlist_id = ? AND position >= ?',
+          variables: [Variable.withString(link.playlistId), Variable.withInt(link.position)],
+          updates: {_db.playlistTracks, _db.playlistMissingTracks},
+        );
+      }
+    }
+    await _db.into(_db.playlistTracks).insertOnConflictUpdate(PlaylistTracksCompanion.insert(
+          playlistId: link.playlistId,
+          trackId: trackId,
+          position: link.position,
+          isPendingPlacement: Value(link.isPendingPlacement),
+        ));
+  }
+
+  Future<void> upsertTrack(ScannedTrack scanned) async {
+    if (await isBlacklisted(filePath: scanned.filePath, trackKey: scanned.id)) return;
+
     // Un même artiste peut apparaître plusieurs fois dans le nom de fichier
     // sanitizé (ex. "Hunter X Hunter" scindé par erreur en featuring
     // "Hunter" + "Hunter" par le séparateur multi-artiste, qui traite le "X"
@@ -104,6 +201,32 @@ class TrackRepository {
     }
 
     return _db.transaction(() async {
+      // Même fichier déjà indexé sous une autre clé (tags modifiés, ou clé
+      // d'une version antérieure de buildSanitizedKey) : la ligne est
+      // renommée en place, playlists comprises — sans quoi l'insertion
+      // ci-dessous créerait une seconde ligne et heurterait l'unicité de
+      // `file_path`.
+      final Track? previous = await findByFilePath(scanned.filePath);
+      if (previous != null && previous.id != scanned.id && await findById(scanned.id) != null) {
+        // Nouvelle clé déjà portée par un AUTRE fichier (deux copies devenues
+        // identiques, ex. « Été » / « Ete » depuis le repli des accents) : la
+        // ligne existante est gardée telle quelle — l'écraser heurterait
+        // l'unicité de `file_path` et interromprait tout le scan. Date et
+        // empreinte à jour : le scan suivant ne le relit pas.
+        await (_db.update(_db.tracks)..where((t) => t.id.equals(previous.id))).write(TracksCompanion(
+          lastModifiedEpochMs: Value(scanned.lastModifiedEpochMs),
+          fileHash: Value(scanned.fileHash),
+        ));
+        return;
+      }
+      if (previous != null && previous.id != scanned.id) {
+        await (_db.update(_db.tracks)..where((t) => t.id.equals(previous.id)))
+            .write(TracksCompanion(id: Value(scanned.id)));
+        await (_db.update(_db.playlistTracks)..where((t) => t.trackId.equals(previous.id)))
+            .write(PlaylistTracksCompanion(trackId: Value(scanned.id)));
+        await (_db.delete(_db.trackArtists)..where((t) => t.trackId.equals(previous.id))).go();
+      }
+
       await _db.into(_db.tracks).insertOnConflictUpdate(
             TracksCompanion.insert(
               id: scanned.id,

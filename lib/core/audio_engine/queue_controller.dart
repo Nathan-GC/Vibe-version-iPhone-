@@ -23,6 +23,16 @@ class QueueController extends _$QueueController {
 
   void removeAt(int index) => state = [...state]..removeAt(index);
 
+  /// Morceaux sortis de la bibliothèque (supprimés, liste noire) : retirés de
+  /// la file ET de l'ordre pré-mélange, que [unshuffle] ne les ramène pas.
+  void removeIds(Set<String> trackIds) {
+    state = [
+      for (final String id in state)
+        if (!trackIds.contains(id)) id
+    ];
+    _preShuffleOrder = _preShuffleOrder?.where((id) => !trackIds.contains(id)).toList();
+  }
+
   void reorder(int oldIndex, int newIndex) {
     final List<String> updated = [...state];
     final String item = updated.removeAt(oldIndex);

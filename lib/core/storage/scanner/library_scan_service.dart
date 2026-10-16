@@ -30,9 +30,17 @@ class LibraryScanService {
   final SilenceTrimmerService _silenceTrimmer;
 
   /// Traite un fichier déjà connu (hors scan de dossier) — le repli sans-ID3
-  /// reparse son propre nom de fichier sur disque.
-  Future<ScannedTrack?> processSingleFile(File file) {
-    return _process(file, () => _filenameSanitizer.sanitizeFilename(p.basename(file.path)));
+  /// reparse son propre nom de fichier sur disque. [skipKey] : écarte le
+  /// fichier (`null`) dès sa clé connue, avant le découpage des silences.
+  Future<ScannedTrack?> processSingleFile(File file, {Future<bool> Function(String trackKey)? skipKey}) {
+    return _process(file, () => _filenameSanitizer.sanitizeFilename(p.basename(file.path)), skipKey: skipKey);
+  }
+
+  /// Identité seule (clé `tracks.id`, titre, artistes, durée), sans
+  /// découpage des silences : de quoi reconnaître un titre en liste noire
+  /// avant tout import ou masquer un fichier choisi. `null` si trop court.
+  Future<ScannedTrack?> identify(File file) {
+    return _process(file, () => _filenameSanitizer.sanitizeFilename(p.basename(file.path)), detectSilence: false);
   }
 
   /// Traite un fichier tout juste importé via StorageManagerService (Étape 6 —
@@ -44,7 +52,12 @@ class LibraryScanService {
     return _process(imported.file, () => imported.sanitizedFromOriginalName);
   }
 
-  Future<ScannedTrack?> _process(File file, SanitizedFilename Function() fallbackSanitize) async {
+  Future<ScannedTrack?> _process(
+    File file,
+    SanitizedFilename Function() fallbackSanitize, {
+    bool detectSilence = true,
+    Future<bool> Function(String trackKey)? skipKey,
+  }) async {
     final RawTrackMetadata metadata = await _metadataExtractor.extract(file);
     final int durationMs = metadata.durationMs ?? 0;
 
@@ -72,8 +85,9 @@ class LibraryScanService {
 
     final String primaryArtist = artists.isNotEmpty ? artists.first : 'Unknown';
     final String id = buildSanitizedKey(title: title, album: metadata.album, primaryArtist: primaryArtist);
+    if (skipKey != null && await skipKey(id)) return null;
 
-    final trim = durationMs > 0
+    final trim = detectSilence && durationMs > 0
         ? await _silenceTrimmer.detect(file.path, durationMs: durationMs)
         : const TrimResult(trimStartMs: 0, trimEndMs: 0);
 

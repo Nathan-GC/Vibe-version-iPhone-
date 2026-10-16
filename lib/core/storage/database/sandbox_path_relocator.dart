@@ -78,6 +78,20 @@ class SandboxPathRelocator {
         }
       }
 
+      // Liste noire : sans réalignement, un fichier masqué changerait de
+      // chemin à la mise à jour et le dossier Fichiers le réimporterait.
+      for (final BlacklistedTrack entry in await _db.select(_db.blacklistedTracks).get()) {
+        final String? filePath = relocate(entry.filePath, currentRoot);
+        if (filePath == null) continue;
+        try {
+          await (_db.update(_db.blacklistedTracks)..where((b) => b.filePath.equals(entry.filePath)))
+              .write(BlacklistedTracksCompanion(filePath: Value(filePath)));
+          updated++;
+        } on Exception {
+          // Clé primaire : une entrée existe déjà pour ce chemin courant.
+        }
+      }
+
       for (final Playlist playlist in await _db.select(_db.playlists).get()) {
         final String? cover = relocate(playlist.coverImagePath, currentRoot);
         final String? image = relocate(playlist.customBackgroundImagePath, currentRoot);

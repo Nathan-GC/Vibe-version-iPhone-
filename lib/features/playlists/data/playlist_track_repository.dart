@@ -17,6 +17,7 @@ class PlaylistTrackRepository {
   /// et "Ajouter à une playlist") ne peuvent plus obtenir la même position.
   Future<void> addTrack(String playlistId, String trackId) {
     return _db.transaction(() async {
+      if ((await _inLibrary([trackId])).isEmpty) return;
       final int nextPosition = await _nextPosition(playlistId);
       await _db.into(_db.playlistTracks).insertOnConflictUpdate(
             PlaylistTracksCompanion.insert(playlistId: playlistId, trackId: trackId, position: nextPosition),
@@ -39,7 +40,9 @@ class PlaylistTrackRepository {
       final List<PlaylistTrack> existing =
           await (_db.select(_db.playlistTracks)..where((t) => t.playlistId.equals(playlistId))).get();
       final Set<String> alreadyPresent = existing.map((t) => t.trackId).toSet();
-      final List<String> toAdd = {...trackIds}.where((id) => !alreadyPresent.contains(id)).toList();
+      final Set<String> inLibrary = await _inLibrary(trackIds);
+      final List<String> toAdd =
+          {...trackIds}.where((id) => inLibrary.contains(id) && !alreadyPresent.contains(id)).toList();
       if (toAdd.isEmpty) return 0;
 
       int nextPosition = await _nextPosition(playlistId);
@@ -65,6 +68,16 @@ class PlaylistTrackRepository {
     final query = _db.select(_db.playlistTracks)
       ..where((t) => t.playlistId.equals(playlistId) & t.trackId.equals(trackId));
     return query.watch().map((rows) => rows.isNotEmpty);
+  }
+
+  /// Ids réellement en bibliothèque : un id périmé (morceau supprimé ou mis
+  /// en liste noire pendant qu'un écran l'affichait encore) n'est jamais
+  /// ajouté — SQLite n'impose pas la clé étrangère `track_id`.
+  Future<Set<String>> _inLibrary(List<String> trackIds) async {
+    final query = _db.selectOnly(_db.tracks)
+      ..addColumns([_db.tracks.id])
+      ..where(_db.tracks.id.isIn(trackIds));
+    return {for (final row in await query.get()) row.read(_db.tracks.id)!};
   }
 
   /// Position suivant la plus grande position occupée, morceaux ET titres

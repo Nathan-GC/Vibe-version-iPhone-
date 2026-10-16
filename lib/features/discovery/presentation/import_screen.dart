@@ -6,9 +6,12 @@ import '../../../core/networking/spotify/spotify_credentials.dart';
 import '../../../core/playlist_manifest/playlist_manifest.dart';
 import '../../playlists/presentation/import/playlist_json_import_flow.dart';
 import '../data/import_providers.dart';
+import 'imported_tracks_tab.dart';
 
 /// Section "Import" de Tab 1 (Étape 6) : liens Spotify et manifestes JSON
-/// partagés convergent vers le même pipeline fork / diff / morceaux manquants.
+/// partagés convergent vers le même pipeline fork / diff / morceaux manquants
+/// (onglet "Sources") ; onglet "Titres" : titres importés et liste noire
+/// (voir [ImportedTracksTab]).
 class ImportScreen extends ConsumerStatefulWidget {
   const ImportScreen({super.key});
 
@@ -89,76 +92,86 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Import')),
-      body: AbsorbPointer(
-        absorbing: _busy,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            Text('Lien de playlist Spotify', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _urlController,
-              decoration: const InputDecoration(
-                hintText: 'https://open.spotify.com/playlist/...',
-                border: OutlineInputBorder(),
-              ),
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Import'),
+          bottom: const TabBar(tabs: [Tab(text: 'Sources'), Tab(text: 'Titres')]),
+        ),
+        body: TabBarView(children: [_sources(context), const ImportedTracksTab()]),
+      ),
+    );
+  }
+
+  Widget _sources(BuildContext context) {
+    return AbsorbPointer(
+      absorbing: _busy,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text('Lien de playlist Spotify', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _urlController,
+            decoration: const InputDecoration(
+              hintText: 'https://open.spotify.com/playlist/...',
+              border: OutlineInputBorder(),
             ),
-            const SizedBox(height: 8),
-            FilledButton.icon(
-              icon: _busy
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.link),
-              label: const Text('Importer depuis Spotify'),
-              onPressed: _busy ? null : _importFromSpotify,
+          ),
+          const SizedBox(height: 8),
+          FilledButton.icon(
+            icon: _busy
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.link),
+            label: const Text('Importer depuis Spotify'),
+            onPressed: _busy ? null : _importFromSpotify,
+          ),
+          const SizedBox(height: 24),
+          ExpansionTile(
+            title: const Text('Identifiants API Spotify'),
+            subtitle: const Text(
+              'Synchronisation complète des pistes — nécessite une connexion utilisateur Spotify '
+              '(fonctionnalité à venir). Seul le titre de la playlist est importé pour l\'instant.',
             ),
-            const SizedBox(height: 24),
-            ExpansionTile(
-              title: const Text('Identifiants API Spotify'),
-              subtitle: const Text(
-                'Synchronisation complète des pistes — nécessite une connexion utilisateur Spotify '
-                '(fonctionnalité à venir). Seul le titre de la playlist est importé pour l\'instant.',
-              ),
-              children: [
-                Tooltip(
-                  message: 'Connexion utilisateur Spotify requise — pas encore disponible dans cette version.',
-                  child: IgnorePointer(
-                    child: Opacity(
-                      opacity: 0.5,
-                      child: Column(
-                        children: [
-                          TextField(
-                            controller: _clientIdController,
-                            decoration: const InputDecoration(labelText: 'Client ID'),
-                          ),
-                          TextField(
-                            controller: _clientSecretController,
-                            decoration: const InputDecoration(labelText: 'Client Secret'),
-                            obscureText: true,
-                          ),
-                          const SizedBox(height: 8),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: TextButton(onPressed: _saveCredentials, child: const Text('Enregistrer')),
-                          ),
-                        ],
-                      ),
+            children: [
+              Tooltip(
+                message: 'Connexion utilisateur Spotify requise — pas encore disponible dans cette version.',
+                child: IgnorePointer(
+                  child: Opacity(
+                    opacity: 0.5,
+                    child: Column(
+                      children: [
+                        TextField(
+                          controller: _clientIdController,
+                          decoration: const InputDecoration(labelText: 'Client ID'),
+                        ),
+                        TextField(
+                          controller: _clientSecretController,
+                          decoration: const InputDecoration(labelText: 'Client Secret'),
+                          obscureText: true,
+                        ),
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton(onPressed: _saveCredentials, child: const Text('Enregistrer')),
+                        ),
+                      ],
                     ),
                   ),
                 ),
-              ],
-            ),
-            const Divider(height: 32),
-            Text('Manifeste JSON partagé', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              icon: const Icon(Icons.file_open_outlined),
-              label: const Text('Importer un fichier .json'),
-              onPressed: _busy ? null : _importFromJsonFile,
-            ),
-          ],
-        ),
+              ),
+            ],
+          ),
+          const Divider(height: 32),
+          Text('Manifeste JSON partagé', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.file_open_outlined),
+            label: const Text('Importer un fichier .json'),
+            onPressed: _busy ? null : _importFromJsonFile,
+          ),
+        ],
       ),
     );
   }

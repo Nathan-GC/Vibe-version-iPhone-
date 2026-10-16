@@ -132,4 +132,63 @@ void main() {
       expect((await repository.findById('t1'))!.artists, ['Artist & A']);
     });
   });
+
+  test('a file rescanned under a new key (P4 accented title) is renamed in place, playlists kept', () async {
+    ScannedTrack sameFile(String id) => ScannedTrack(
+          id: id,
+          title: 'Été',
+          album: '',
+          primaryArtist: 'Zaz',
+          artists: const ['Zaz'],
+          filePath: '/music/ete.mp3',
+          durationMs: 180000,
+          requiresUserReview: false,
+          trimStartMs: 0,
+          trimEndMs: 0,
+        );
+    await repository.upsertTrack(sameFile('t__zaz')); // ancienne clé : accents purgés
+    await db.into(db.playlists).insert(PlaylistsCompanion.insert(id: 'p', title: 'Été'));
+    await db
+        .into(db.playlistTracks)
+        .insert(PlaylistTracksCompanion.insert(playlistId: 'p', trackId: 't__zaz', position: 3));
+
+    await repository.upsertTrack(sameFile('ete__zaz'));
+
+    expect((await db.select(db.tracks).get()).map((t) => t.id), ['ete__zaz']);
+    final List<PlaylistTrack> links =
+        await (db.select(db.playlistTracks)..where((t) => t.playlistId.equals('p'))).get();
+    expect(links.map((l) => (l.trackId, l.position)), [('ete__zaz', 3)]);
+    expect(
+      (await (db.select(db.trackArtists)..where((t) => t.trackId.equals('t__zaz'))).get()),
+      isEmpty,
+      reason: 'aucune ligne orpheline sous l\'ancienne clé',
+    );
+  });
+
+  test('a rescanned file whose new key belongs to another file keeps its row instead of crashing', () async {
+    ScannedTrack copy(String id, String filePath, {int mtime = 0}) => ScannedTrack(
+          id: id,
+          title: 'Été',
+          album: '',
+          primaryArtist: 'Zaz',
+          artists: const ['Zaz'],
+          filePath: filePath,
+          durationMs: 180000,
+          requiresUserReview: false,
+          trimStartMs: 0,
+          trimEndMs: 0,
+          lastModifiedEpochMs: mtime,
+        );
+    await repository.upsertTrack(copy('t__zaz', '/music/ete.mp3', mtime: 1)); // ancienne clé
+    await repository.upsertTrack(copy('ete__zaz', '/music/ete (copie).mp3')); // déjà sous la nouvelle clé
+
+    await repository.upsertTrack(copy('ete__zaz', '/music/ete.mp3', mtime: 2));
+
+    final List<Track> rows = await (db.select(db.tracks)..orderBy([(t) => OrderingTerm.asc(t.filePath)])).get();
+    expect(rows.map((t) => (t.id, t.filePath)), [
+      ('ete__zaz', '/music/ete (copie).mp3'),
+      ('t__zaz', '/music/ete.mp3'),
+    ]);
+    expect(rows.last.lastModifiedEpochMs, 2, reason: 'pas relu à chaque scan');
+  });
 }

@@ -276,7 +276,9 @@ class PlayerController extends _$PlayerController {
     state = state.copyWith(repeatMode: mode);
   }
 
-  Future<void> playTrackAt(int startIndex, {String? playlistId}) async {
+  /// [autoplay] `false` : piste chargée et affichée, mais laissée en pause
+  /// (voir [removeTracks]).
+  Future<void> playTrackAt(int startIndex, {String? playlistId, bool autoplay = true}) async {
     // Jeton de génération, pris AVANT tout `await` (ordre des appels
     // garanti) : un autre appel (tap rapide sur "suivant", changement de
     // playlist, complétion naturelle qui se chevauche avec un swap manuel)
@@ -342,20 +344,59 @@ class PlayerController extends _$PlayerController {
       // ce qu'un tap manuel force une resynchronisation. Bug réel observé lors
       // d'un retest QA (Vibe Neon "sans effet" au premier lancement d'une
       // playlist après ouverture de l'app).
-      state = state.copyWith(status: PlaybackStatus.playing, currentTrack: track, currentPlaylistId: playlistId);
-      unawaited(_player.play());
+      state = state.copyWith(
+        status: autoplay ? PlaybackStatus.playing : PlaybackStatus.paused,
+        currentTrack: track,
+        currentPlaylistId: playlistId,
+      );
+      if (autoplay) unawaited(_player.play());
 
       unawaited(_storage.save(
         queueTrackIds: tracks.map((t) => t.id).toList(),
         currentIndex: index,
         currentPlaylistId: state.currentPlaylistId,
       ));
-      unawaited(ref.read(trackRepositoryProvider).recordPlay(track.id));
+      if (autoplay) unawaited(ref.read(trackRepositoryProvider).recordPlay(track.id));
       return;
     }
 
     // Plus aucun morceau lisible à partir de `startIndex` : rien à jouer.
     if (token == _loadToken) state = state.copyWith(status: PlaybackStatus.idle);
+  }
+
+  /// Morceaux sortis de la bibliothèque (fichier supprimé, liste noire) : le
+  /// moteur ne doit plus jamais les lire. Retirés de la file ; si le morceau
+  /// en cours en fait partie, la lecture passe au morceau suivant restant
+  /// (le premier après la fin de la file), en gardant l'état lecture/pause,
+  /// ou s'arrête si la file est vide.
+  Future<void> removeTracks(Set<String> trackIds) async {
+    final List<Track>? before = ref.read(queueTracksProvider).value;
+    if (before == null || !before.any((t) => trackIds.contains(t.id))) {
+      ref.read(queueControllerProvider.notifier).removeIds(trackIds);
+      return;
+    }
+    final String? currentId = state.currentTrack?.id;
+    final bool currentRemoved = currentId != null && trackIds.contains(currentId);
+    final bool wasPlaying = _player.playing;
+    // Morceaux conservés avant la position courante = index, dans la file
+    // réduite, du morceau qui suivait.
+    final int position = _targetIndex.clamp(0, before.length);
+    final int nextIndex = before.take(position).where((t) => !trackIds.contains(t.id)).length;
+
+    ref.read(queueControllerProvider.notifier).removeIds(trackIds);
+    final List<Track> tracks = await ref.read(queueTracksProvider.future);
+    if (!currentRemoved) {
+      _currentIndex = _targetIndex = tracks.indexWhere((t) => t.id == currentId);
+      return;
+    }
+    if (tracks.isEmpty) {
+      _skipDebounce?.cancel();
+      ++_loadToken;
+      await _player.stop();
+      state = PlayerSnapshot(status: PlaybackStatus.idle, repeatMode: state.repeatMode);
+      return;
+    }
+    await playTrackAt(nextIndex < tracks.length ? nextIndex : 0, autoplay: wasPlaying);
   }
 
   /// Séparés de [togglePlayPause] pour la notification média (Étape 5) :

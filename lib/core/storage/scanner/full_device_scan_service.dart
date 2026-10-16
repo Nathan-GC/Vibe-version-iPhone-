@@ -109,6 +109,10 @@ class FullDeviceScanService {
   }
 
   Future<ScannedTrack?> _processOneFile(File file, TrackRepository trackRepository) async {
+    // Liste noire : écarté avant toute lecture (ni hachage, ni ffprobe, ni
+    // découpage des silences) — upsertTrack le refuserait de toute façon.
+    if (await trackRepository.isBlacklisted(filePath: file.path)) return null;
+
     final FileStat stat = await file.stat();
     final int currentMtime = stat.modified.millisecondsSinceEpoch;
 
@@ -120,7 +124,12 @@ class FullDeviceScanService {
     }
 
     final String hash = await compute(_hashFile, file.path);
-    final ScannedTrack? scanned = await _scanService.processSingleFile(file);
+    // Liste noire par clé (fichier masqué depuis une copie du sélecteur) :
+    // reconnu dès que son identité est lue, avant le découpage des silences.
+    final ScannedTrack? scanned = await _scanService.processSingleFile(
+      file,
+      skipKey: (trackKey) => trackRepository.isBlacklisted(filePath: file.path, trackKey: trackKey),
+    );
     if (scanned == null) return null;
 
     return ScannedTrack(

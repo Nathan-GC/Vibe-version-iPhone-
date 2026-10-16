@@ -131,10 +131,11 @@ class TrackActionsSheet extends ConsumerWidget {
   Future<void> _togglePreview(WidgetRef ref) => toggleLocalTrackPreview(ref, track);
 
   /// Voir [confirmAndDeleteLocalTrackFile] — la feuille ne se ferme qu'une
-  /// fois le fichier réellement supprimé.
+  /// fois le morceau retiré de Vibe (fichier supprimé ou, protégé, mis en
+  /// liste noire).
   Future<void> _deleteAudioFile(BuildContext context, WidgetRef ref) async {
-    final bool deleted = await confirmAndDeleteLocalTrackFile(context, ref, track);
-    if (!deleted) return;
+    final TrackFileDeletion outcome = await confirmAndDeleteLocalTrackFile(context, ref, track);
+    if (outcome == TrackFileDeletion.cancelled) return;
     if (context.mounted) Navigator.of(context).pop();
     onChanged?.call();
   }
