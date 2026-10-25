@@ -16,8 +16,9 @@ const String kLikedPlaylistId = 'liked-tracks';
 abstract class PlaylistRepository {
   Stream<List<Playlist>> watchAll();
 
-  /// Playlists du carrousel de "Mon espace" : sans "Tous les titres importés",
-  /// triées par `carouselPosition` puis (jamais ordonnées) par création.
+  /// Playlists du carrousel de "Mon espace" (toutes, y compris "Tous les titres
+  /// importés", rangée dans la famille auto) : triées par `carouselPosition`
+  /// puis (jamais ordonnées) par création.
   Stream<List<Playlist>> watchCarousel();
 
   /// Persiste le nouvel ordre du carrousel (positions 0..n-1) en une transaction.

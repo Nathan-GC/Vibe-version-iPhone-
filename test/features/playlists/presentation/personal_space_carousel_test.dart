@@ -8,12 +8,14 @@ import 'package:playlist_app/core/shared/widgets/playlist_card.dart';
 import 'package:playlist_app/core/storage/database/app_database.dart';
 import 'package:playlist_app/core/storage/database/database_provider.dart';
 import 'package:playlist_app/core/storage/database/track_repository.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:playlist_app/features/playlists/presentation/personal_space_screen.dart';
 
 void main() {
   late AppDatabase db;
 
   setUp(() async {
+    SharedPreferences.setMockInitialValues({});
     db = AppDatabase.forTesting(NativeDatabase.memory());
     for (final (String id, String title) in [
       (kAllImportedPlaylistId, 'Tous les titres importés'),
@@ -33,6 +35,10 @@ void main() {
   }
 
   Future<void> pumpScreen(WidgetTester tester) async {
+    // Écran haut : toutes les sections sont construites sans défilement.
+    tester.view.physicalSize = const Size(800, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     final GoRouter router = GoRouter(
       routes: [
         GoRoute(path: '/', builder: (_, __) => const PersonalSpaceScreen()),
@@ -51,13 +57,13 @@ void main() {
     await tester.pump(Duration.zero);
   }
 
-  testWidgets('carousel hides all-imported (still in the list) and long-press does not open the editor',
+  testWidgets('carousel includes all-imported (also in the list) and long-press does not open the editor',
       (tester) async {
     await pumpScreen(tester);
 
-    expect(find.byType(PlaylistCard), findsNWidgets(3));
-    expect(
-        find.descendant(of: find.byType(PlaylistCard), matching: find.text('Tous les titres importés')), findsNothing);
+    expect(find.byType(PlaylistCard), findsNWidgets(4));
+    expect(find.descendant(of: find.byType(PlaylistCard), matching: find.text('Tous les titres importés')),
+        findsOneWidget);
     expect(find.byType(ListTile), findsNWidgets(4));
     expect(find.widgetWithText(ListTile, 'Tous les titres importés'), findsOneWidget);
 

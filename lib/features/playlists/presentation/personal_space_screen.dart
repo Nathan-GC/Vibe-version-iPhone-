@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/shared/widgets/playlist_card.dart';
 import '../../../core/storage/database/app_database.dart';
@@ -11,6 +12,7 @@ import '../../../core/theme/vibe_engine/playlist_vibe_resolver.dart';
 import '../../../core/theme/vibe_engine/vibe_engine.dart';
 import '../data/playlist_providers.dart';
 import '../data/playlist_repository.dart';
+import '../domain/playlist_category.dart';
 import 'export/playlist_export_flow.dart';
 import 'import/playlist_json_import_flow.dart';
 
@@ -96,15 +98,9 @@ class PersonalSpaceScreen extends ConsumerWidget {
           return ListView(
             children: [
               const SizedBox(height: AppSpacing.m),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: AppSpacing.m),
-                child: Text('Tes playlists', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-              ),
-              const SizedBox(height: AppSpacing.s),
-              const SizedBox(height: 220, child: _PlaylistCarousel()),
-              const SizedBox(height: AppSpacing.l),
+              for (final PlaylistCategory category in PlaylistCategory.values) _PlaylistCarousel(category: category),
               const Divider(height: 1),
-              ...data.map((playlist) => _PlaylistTile(playlist: playlist)),
+              for (final PlaylistCategory category in PlaylistCategory.values) _PlaylistSection(category: category),
             ],
           );
         },
@@ -115,12 +111,28 @@ class PersonalSpaceScreen extends ConsumerWidget {
   }
 }
 
-/// Carrousel des playlists ("Tous les titres importés" exclu), réordonnable
+/// Titre affiché au-dessus du carrousel d'une famille.
+String _carouselTitle(PlaylistCategory category) => switch (category) {
+      PlaylistCategory.created => 'Playlists créées',
+      PlaylistCategory.auto => 'Playlists auto',
+      PlaylistCategory.imported => 'Playlists importées',
+    };
+
+/// Titre de la section repliable d'une famille.
+String _sectionTitle(PlaylistCategory category) => switch (category) {
+      PlaylistCategory.created => 'Playlists créées',
+      PlaylistCategory.auto => 'Playlists automatiques',
+      PlaylistCategory.imported => 'Playlists importées',
+    };
+
+/// Carrousel d'une famille de playlists, réordonnable
 /// par appui long puis glisser-déposer — poignée par défaut de
 /// ReorderableListView sur mobile : la carte n'a donc aucun onLongPress, qui
 /// gagnerait l'arène de gestes.
 class _PlaylistCarousel extends ConsumerStatefulWidget {
-  const _PlaylistCarousel();
+  const _PlaylistCarousel({required this.category});
+
+  final PlaylistCategory category;
 
   @override
   ConsumerState<_PlaylistCarousel> createState() => _PlaylistCarouselState();
@@ -147,8 +159,10 @@ class _PlaylistCarouselState extends ConsumerState<_PlaylistCarousel> {
 
   @override
   Widget build(BuildContext context) {
-    final List<Playlist> carousel = _visible(ref.watch(carouselPlaylistsProvider).value ?? const []);
-    return ReorderableListView.builder(
+    final List<Playlist> carousel = _visible(ref.watch(carouselByCategoryProvider(widget.category)).value ?? const []);
+    // Famille vide : ni titre ni carrousel (l'invitation à créer est dans la section du dessous).
+    if (carousel.isEmpty) return const SizedBox.shrink();
+    final Widget list = ReorderableListView.builder(
       padding: const EdgeInsets.only(left: AppSpacing.m),
       scrollDirection: Axis.horizontal,
       itemCount: carousel.length,
@@ -166,6 +180,103 @@ class _PlaylistCarouselState extends ConsumerState<_PlaylistCarousel> {
           onTap: () => playPlaylistAndNavigate(context, ref, carousel[index]),
         ),
       ),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.m),
+          child: Semantics(
+            header: true,
+            child: Text(_carouselTitle(widget.category),
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.s),
+        SizedBox(height: 220, child: list),
+        const SizedBox(height: AppSpacing.m),
+      ],
+    );
+  }
+}
+
+/// Section repliable listant les playlists d'une famille. L'état replié est
+/// mémorisé dans SharedPreferences (une clé par famille), déplié par défaut.
+class _PlaylistSection extends ConsumerStatefulWidget {
+  const _PlaylistSection({required this.category});
+
+  final PlaylistCategory category;
+
+  @override
+  ConsumerState<_PlaylistSection> createState() => _PlaylistSectionState();
+}
+
+class _PlaylistSectionState extends ConsumerState<_PlaylistSection> {
+  /// `null` tant que l'état mémorisé n'est pas relu : la liste n'est alors
+  /// pas affichée, plutôt que de s'ouvrir un instant puis se replier à
+  /// chaque démarrage pour une section laissée repliée.
+  bool? _collapsed;
+
+  String get _prefsKey => 'personal_space_collapsed_${widget.category.name}';
+
+  @override
+  void initState() {
+    super.initState();
+    _restore();
+  }
+
+  Future<void> _restore() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    final bool collapsed = prefs.getBool(_prefsKey) ?? false;
+    if (mounted) setState(() => _collapsed = collapsed);
+  }
+
+  Future<void> _toggle() async {
+    final bool collapsed = !(_collapsed ?? false);
+    setState(() => _collapsed = collapsed);
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_prefsKey, collapsed);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<Playlist> playlists = ref.watch(playlistsByCategoryProvider(widget.category)).value ?? const [];
+    // Section vide masquée, sauf "créées" (toujours là, avec son invitation).
+    if (playlists.isEmpty && widget.category != PlaylistCategory.created) return const SizedBox.shrink();
+
+    final String title = _sectionTitle(widget.category);
+    final bool? collapsed = _collapsed;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: AppSpacing.m, right: AppSpacing.xs),
+          child: Row(
+            children: [
+              Expanded(
+                child: Semantics(
+                  header: true,
+                  child: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                ),
+              ),
+              IconButton(
+                icon: Icon(collapsed ?? false ? Icons.expand_more : Icons.expand_less),
+                tooltip: collapsed ?? false ? 'Déplier la section $title' : 'Replier la section $title',
+                onPressed: collapsed == null ? null : _toggle,
+              ),
+            ],
+          ),
+        ),
+        if (collapsed == false) ...[
+          if (playlists.isEmpty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(AppSpacing.m, 0, AppSpacing.m, AppSpacing.m),
+              child: Text('Aucune playlist créée. Touche le bouton "+" pour en créer une.'),
+            )
+          else
+            ...playlists.map((playlist) => _PlaylistTile(playlist: playlist)),
+        ],
+      ],
     );
   }
 }

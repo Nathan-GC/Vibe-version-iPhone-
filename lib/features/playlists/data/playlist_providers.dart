@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/storage/database/app_database.dart';
 import '../../../core/storage/database/database_provider.dart';
+import '../domain/playlist_category.dart';
 import '../domain/playlist_editor_entry.dart';
 import 'drift_playlist_repository.dart';
 import 'playlist_manifest_service.dart';
@@ -24,10 +25,23 @@ final StreamProvider<List<Playlist>> playlistsProvider = StreamProvider<List<Pla
   return ref.watch(playlistRepositoryProvider).watchAll();
 });
 
-/// Carrousel de "Mon espace" : ordre personnalisé, sans la sélection système
-/// "Tous les titres importés".
+/// Carrousel de "Mon espace" : ordre personnalisé, toutes familles confondues.
 final StreamProvider<List<Playlist>> carouselPlaylistsProvider = StreamProvider<List<Playlist>>((ref) {
   return ref.watch(playlistRepositoryProvider).watchCarousel();
+});
+
+/// Carrousel d'une famille, dans l'ordre du carrousel global.
+final carouselByCategoryProvider = Provider.family<AsyncValue<List<Playlist>>, PlaylistCategory>((ref, category) {
+  return ref.watch(carouselPlaylistsProvider).whenData(
+        (playlists) => playlists.where((p) => playlistCategoryOf(p) == category).toList(),
+      );
+});
+
+/// Liste d'une famille, dans l'ordre de `watchAll` (création).
+final playlistsByCategoryProvider = Provider.family<AsyncValue<List<Playlist>>, PlaylistCategory>((ref, category) {
+  return ref.watch(playlistsProvider).whenData(
+        (playlists) => playlists.where((p) => playlistCategoryOf(p) == category).toList(),
+      );
 });
 
 final playlistByIdProvider = StreamProvider.family<Playlist?, String>((ref, playlistId) {

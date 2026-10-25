@@ -22,7 +22,6 @@ class DriftPlaylistRepository implements PlaylistRepository {
   @override
   Stream<List<Playlist>> watchCarousel() {
     return (_db.select(_db.playlists)
-          ..where((p) => p.id.equals(kAllImportedPlaylistId).not())
           ..orderBy([
             (p) => OrderingTerm.asc(p.carouselPosition.isNull()),
             (p) => OrderingTerm.asc(p.carouselPosition),
