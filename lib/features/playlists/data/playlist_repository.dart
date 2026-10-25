@@ -15,6 +15,14 @@ const String kLikedPlaylistId = 'liked-tracks';
 /// comme entité de domaine plutôt que dupliquée.
 abstract class PlaylistRepository {
   Stream<List<Playlist>> watchAll();
+
+  /// Playlists du carrousel de "Mon espace" : sans "Tous les titres importés",
+  /// triées par `carouselPosition` puis (jamais ordonnées) par création.
+  Stream<List<Playlist>> watchCarousel();
+
+  /// Persiste le nouvel ordre du carrousel (positions 0..n-1) en une transaction.
+  Future<void> reorderCarousel(List<String> orderedIds);
+
   Stream<Playlist?> watchPlaylist(String playlistId);
 
   /// Retrouve une playlist locale déjà forkée depuis ce `manifest.id` — permet
@@ -43,8 +51,21 @@ abstract class PlaylistRepository {
 
   /// Persiste l'ordre après édition : purge `is_pending_placement`, écrit les
   /// `position` (morceaux ET titres grisés, dans une numérotation commune),
-  /// incrémente `version` (Étape 5 — "Commit Edits").
-  Future<void> commitOrder(String playlistId, List<PlaylistEditorEntry> orderedEntries);
+  /// remet `added_since_save` à faux, incrémente `version` (Étape 5 — "Commit
+  /// Edits").
+  ///
+  /// Une ligne en base absente de [orderedEntries] (morceau ajouté pendant
+  /// l'édition) n'est jamais supprimée : elle est replacée après les entrées
+  /// listées, drapeaux intacts. Avec [keepPending] (enregistrement partiel),
+  /// les morceaux listés gardent leur `is_pending_placement` actuel en base
+  /// (contour ambre conservé).
+  Future<void> commitOrder(String playlistId, List<PlaylistEditorEntry> orderedEntries, {bool keepPending = false});
+
+  /// Retire de la playlist les morceaux ajoutés depuis le dernier
+  /// enregistrement (`added_since_save`) et renvoie leur nombre. Sans effet
+  /// (0) pour [kAllImportedPlaylistId], qui contient toujours toute la
+  /// bibliothèque.
+  Future<int> discardAdditionsSinceSave(String playlistId);
 
   /// Associe manuellement un titre grisé à un morceau de la bibliothèque :
   /// il devient une entrée lisible à la même position. Sans effet sur la

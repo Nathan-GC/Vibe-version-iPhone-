@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -100,20 +101,7 @@ class PersonalSpaceScreen extends ConsumerWidget {
                 child: Text('Tes playlists', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
               ),
               const SizedBox(height: AppSpacing.s),
-              SizedBox(
-                height: 220,
-                child: ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: AppSpacing.m),
-                  scrollDirection: Axis.horizontal,
-                  itemCount: data.length,
-                  separatorBuilder: (context, index) => const SizedBox(width: AppSpacing.m),
-                  itemBuilder: (context, index) => PlaylistCard(
-                    playlist: data[index],
-                    onTap: () => playPlaylistAndNavigate(context, ref, data[index]),
-                    onLongPress: () => context.push('/space/playlist/${data[index].id}/edit'),
-                  ),
-                ),
-              ),
+              const SizedBox(height: 220, child: _PlaylistCarousel()),
               const SizedBox(height: AppSpacing.l),
               const Divider(height: 1),
               ...data.map((playlist) => _PlaylistTile(playlist: playlist)),
@@ -122,6 +110,61 @@ class PersonalSpaceScreen extends ConsumerWidget {
         },
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => Center(child: Text('Erreur : $error')),
+      ),
+    );
+  }
+}
+
+/// Carrousel des playlists ("Tous les titres importés" exclu), réordonnable
+/// par appui long puis glisser-déposer — poignée par défaut de
+/// ReorderableListView sur mobile : la carte n'a donc aucun onLongPress, qui
+/// gagnerait l'arène de gestes.
+class _PlaylistCarousel extends ConsumerStatefulWidget {
+  const _PlaylistCarousel();
+
+  @override
+  ConsumerState<_PlaylistCarousel> createState() => _PlaylistCarouselState();
+}
+
+class _PlaylistCarouselState extends ConsumerState<_PlaylistCarousel> {
+  /// Ordre déposé, affiché tout de suite : sans lui, la carte revenait à son
+  /// ancienne place le temps que le flux Drift réémette après l'écriture.
+  List<String>? _droppedIds;
+
+  List<Playlist> _visible(List<Playlist> fromDb) {
+    final List<String>? dropped = _droppedIds;
+    if (dropped == null) return fromDb;
+    final Map<String, Playlist> byId = {for (final Playlist playlist in fromDb) playlist.id: playlist};
+    // Base rattrapée, ou playlist ajoutée / supprimée entre-temps : la base fait foi.
+    if (dropped.length != fromDb.length ||
+        !dropped.every(byId.containsKey) ||
+        listEquals(dropped, byId.keys.toList())) {
+      _droppedIds = null;
+      return fromDb;
+    }
+    return [for (final String id in dropped) byId[id]!];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<Playlist> carousel = _visible(ref.watch(carouselPlaylistsProvider).value ?? const []);
+    return ReorderableListView.builder(
+      padding: const EdgeInsets.only(left: AppSpacing.m),
+      scrollDirection: Axis.horizontal,
+      itemCount: carousel.length,
+      onReorderItem: (oldIndex, newIndex) {
+        final List<String> ids = carousel.map((p) => p.id).toList();
+        ids.insert(newIndex, ids.removeAt(oldIndex));
+        setState(() => _droppedIds = ids);
+        ref.read(playlistRepositoryProvider).reorderCarousel(ids);
+      },
+      itemBuilder: (context, index) => Padding(
+        key: ValueKey(carousel[index].id),
+        padding: const EdgeInsets.only(right: AppSpacing.m),
+        child: PlaylistCard(
+          playlist: carousel[index],
+          onTap: () => playPlaylistAndNavigate(context, ref, carousel[index]),
+        ),
       ),
     );
   }

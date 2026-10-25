@@ -54,17 +54,20 @@ Future<void> playPlaylistAndNavigate(BuildContext context, WidgetRef ref, Playli
 ///  - appui long = SEUL accès à la vue détaillée ([onLongPress] : éditeur de
 ///    playlist, fiche artiste, feuille d'actions d'un morceau).
 /// Exception : les listes réordonnables (file d'attente, éditeur de
-/// playlist) où l'appui long reste réservé au glisser-déposer.
+/// playlist, carrousel de Mon espace — [onLongPress] null) où l'appui long
+/// reste réservé au glisser-déposer.
 ///
 /// Une seule zone tactile (un seul InkWell) : l'ancienne distinction
 /// pochette = lecture / titre = édition (Section 3.3) est abandonnée.
 class PlaylistCard extends StatelessWidget {
-  const PlaylistCard(
-      {super.key, required this.playlist, required this.onTap, required this.onLongPress, this.width = 152});
+  const PlaylistCard({super.key, required this.playlist, required this.onTap, this.onLongPress, this.width = 152});
 
   final Playlist playlist;
   final VoidCallback onTap;
-  final VoidCallback onLongPress;
+
+  /// Null = aucun geste d'appui long sur la carte (ex. carrousel réordonnable
+  /// de Mon espace, où l'appui long démarre le glisser-déposer).
+  final VoidCallback? onLongPress;
   final double width;
 
   @override

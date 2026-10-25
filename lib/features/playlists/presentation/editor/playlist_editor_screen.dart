@@ -34,6 +34,11 @@ class PlaylistEditorScreen extends ConsumerStatefulWidget {
 
 class _PlaylistEditorScreenState extends ConsumerState<PlaylistEditorScreen> {
   List<PlaylistEditorEntry>? _localOrder;
+
+  /// Clés de [_localOrder] telles que lues/enregistrées en base la dernière
+  /// fois : sert à savoir si l'utilisateur a réordonné depuis (voir
+  /// [_hasUnsaved]).
+  List<String> _savedKeys = const [];
   bool _saving = false;
 
   /// Réorganisation intelligente par bloc (Lot 3.2), activée par son propre
@@ -51,6 +56,15 @@ class _PlaylistEditorScreenState extends ConsumerState<PlaylistEditorScreen> {
   String _query = '';
 
   bool get _isSearching => _query.trim().isNotEmpty;
+
+  @override
+  void initState() {
+    super.initState();
+    // Toujours un instantané frais de la base à l'ouverture : le provider du
+    // flux reste en vie entre deux visites, sa première valeur pouvait donc
+    // être une liste périmée (titres ajoutés depuis le Player invisibles).
+    _refreshLocalOrder();
+  }
 
   @override
   void dispose() {
@@ -78,8 +92,8 @@ class _PlaylistEditorScreenState extends ConsumerState<PlaylistEditorScreen> {
     });
   }
 
-  /// `_localOrder` n'est peuplé qu'une fois (voir le commentaire sur
-  /// `entries.whenData` plus bas) — une action venue de TrackActionsSheet
+  /// `_localOrder` n'est peuplé que par cet instantané (à l'ouverture, voir
+  /// [initState], puis après chaque modification) — une action venue de TrackActionsSheet
   /// (retrait de la playlist) ou d'AddByArtistSheet (ajout en masse) ne s'y
   /// refléterait donc jamais sans une resynchronisation explicite après coup.
   ///
@@ -100,8 +114,97 @@ class _PlaylistEditorScreenState extends ConsumerState<PlaylistEditorScreen> {
     final List<PlaylistEditorEntry> fresh =
         await ref.read(playlistRepositoryProvider).watchEditorEntries(widget.playlistId).first;
     if (!mounted) return;
-    setState(() => _localOrder = fresh);
+    setState(() {
+      _localOrder = fresh;
+      _savedKeys = [for (final PlaylistEditorEntry entry in fresh) entry.key];
+    });
   }
+
+  /// Quelque chose n'est pas enregistré : ordre modifié depuis la dernière
+  /// lecture/sauvegarde, titre au contour ambre (placement en attente) ou
+  /// ajouté depuis le dernier enregistrement.
+  bool get _hasUnsaved {
+    final List<PlaylistEditorEntry>? list = _localOrder;
+    if (list == null) return false;
+    if (list.any((entry) => entry.isPendingPlacement || entry.addedSinceSave)) return true;
+    if (list.length != _savedKeys.length) return true;
+    for (int i = 0; i < list.length; i++) {
+      if (list[i].key != _savedKeys[i]) return true;
+    }
+    return false;
+  }
+
+  /// Sortie (flèche de l'AppBar ou Retour Android) avec des changements non
+  /// enregistrés. Fermer un dialogue sans choisir laisse dans l'éditeur.
+  Future<void> _confirmLeave() async {
+    if (_saving) return;
+    final _LeaveChoice? choice = await showDialog<_LeaveChoice>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Attention, vous n\'avez pas enregistré'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(_LeaveChoice.save), child: const Text('Enregistrer')),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(_LeaveChoice.savePartially),
+            child: const Text('Enregistrer partiellement'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(_LeaveChoice.discard),
+            child: const Text('Ne pas enregistrer'),
+          ),
+        ],
+      ),
+    );
+    if (choice == null || !mounted) return;
+
+    switch (choice) {
+      case _LeaveChoice.save:
+        await _saveAndLeave(keepPending: false);
+      case _LeaveChoice.savePartially:
+        await _saveAndLeave(keepPending: true);
+      case _LeaveChoice.discard:
+        // Rien à départager : "Tous les titres importés" contient toujours
+        // toute la bibliothèque, et sans titre ajouté depuis le dernier
+        // enregistrement seul l'ordre avait changé.
+        if (widget.playlistId == kAllImportedPlaylistId || !_localOrder!.any((entry) => entry.addedSinceSave)) {
+          _leave();
+          return;
+        }
+        final bool? keepAdded = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Titres ajoutés'),
+            content: const Text('Que faire des titres ajoutés depuis le dernier enregistrement ?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('Conserver les titres ajoutés'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Ne pas conserver les nouveaux titres'),
+              ),
+            ],
+          ),
+        );
+        if (keepAdded == null || !mounted) return;
+        if (!keepAdded) await ref.read(playlistRepositoryProvider).discardAdditionsSinceSave(widget.playlistId);
+        if (mounted) _leave();
+    }
+  }
+
+  /// Enregistrement complet (`keepPending: false`, les titres ambre sont
+  /// considérés bien placés) ou partiel (ils restent ambre jusqu'à un
+  /// enregistrement complet), puis sortie.
+  Future<void> _saveAndLeave({required bool keepPending}) async {
+    setState(() => _saving = true);
+    await ref.read(playlistRepositoryProvider).commitOrder(widget.playlistId, _localOrder!, keepPending: keepPending);
+    if (mounted) _leave();
+  }
+
+  /// `Navigator.pop` direct : contrairement à `maybePop`, il ne repasse pas
+  /// par le [PopScope] qui a justement intercepté la sortie.
+  void _leave() => Navigator.of(context).pop();
 
   Future<void> _openTrackActions(Track track) async {
     // `onChanged` (pas seulement l'attente de `show()`) : une action comme
@@ -302,166 +405,167 @@ class _PlaylistEditorScreenState extends ConsumerState<PlaylistEditorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final AsyncValue<List<PlaylistEditorEntry>> entries = ref.watch(playlistEditorEntriesProvider(widget.playlistId));
     final AsyncValue<Playlist?> playlist = ref.watch(playlistByIdProvider(widget.playlistId));
-    // Doit s'exécuter avant la construction du Scaffold ci-dessous : `appBar`
-    // lit `_localOrder` pour (dés)activer le bouton Enregistrer, et Dart
-    // évalue les arguments nommés d'un même appel dans l'ordre du code —
-    // peupler `_localOrder` à l'intérieur de `body:` (plus bas dans l'appel)
-    // arrivait donc une évaluation trop tard : le tout premier frame où les
-    // données arrivaient rendait le bouton désactivé, sans jamais se
-    // rafraîchir ensuite puisque cette affectation ne passe pas par setState.
-    entries.whenData((data) => _localOrder ??= data);
+    // Chargement tant que l'instantané frais de [initState] n'est pas arrivé.
+    final AsyncValue<List<PlaylistEditorEntry>> entries =
+        _localOrder == null ? const AsyncLoading() : AsyncData(_localOrder!);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_smartReorder ? 'Réorganisation' : 'Éditeur'),
-        actions: [
-          IconButton(
-            icon: Icon(_smartReorder ? Icons.close : Icons.low_priority),
-            tooltip: _smartReorder ? 'Quitter la réorganisation intelligente' : 'Réorganisation intelligente',
-            // Toujours possible d'en SORTIR, même si la playlist s'est vidée.
-            onPressed: _saving || (!_smartReorder && (_localOrder?.isEmpty ?? true)) ? null : _toggleSmartReorder,
-          ),
-          IconButton(
-            icon: const Icon(Icons.person_add_alt_outlined),
-            tooltip: 'Ajouter par artiste',
-            onPressed: _openAddByArtist,
-          ),
-          IconButton(
-            icon: _saving
-                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.save_outlined, semanticLabel: 'Enregistrer la playlist'),
-            onPressed: (_localOrder == null || _saving) ? null : _commit,
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          if (playlist.value != null) _CoverHeader(playlist: playlist.value!, onPickImage: _pickCoverImage),
-          if (_searchEnabled && !_smartReorder)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(AppSpacing.m, 0, AppSpacing.m, AppSpacing.s),
-              child: TextField(
-                controller: _searchController,
-                textInputAction: TextInputAction.search,
-                decoration: InputDecoration(
-                  prefixIcon: const Icon(Icons.search),
-                  hintText: 'Rechercher un titre ou un artiste',
-                  border: const OutlineInputBorder(),
-                  isDense: true,
-                  suffixIcon: _query.isEmpty
-                      ? null
-                      : IconButton(icon: const Icon(Icons.clear), tooltip: 'Effacer', onPressed: _clearSearch),
-                ),
-                onChanged: (value) => setState(() => _query = value),
-              ),
+    return PopScope(
+      canPop: !_hasUnsaved,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) _confirmLeave();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_smartReorder ? 'Réorganisation' : 'Éditeur'),
+          actions: [
+            IconButton(
+              icon: Icon(_smartReorder ? Icons.close : Icons.low_priority),
+              tooltip: _smartReorder ? 'Quitter la réorganisation intelligente' : 'Réorganisation intelligente',
+              // Toujours possible d'en SORTIR, même si la playlist s'est vidée.
+              onPressed: _saving || (!_smartReorder && (_localOrder?.isEmpty ?? true)) ? null : _toggleSmartReorder,
             ),
-          Expanded(
-            child: entries.when(
-              data: (data) {
-                final List<PlaylistEditorEntry> list = _localOrder!;
-                if (list.isEmpty) {
-                  return const Center(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 32),
-                      child: Text(
-                        'Playlist vide — utilise "Ajouter par artiste" en haut de l\'écran pour lui ajouter des morceaux.',
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  );
-                }
-
-                if (_smartReorder) return _smartReorderList(list);
-
-                // Recherche active : simple liste filtrée, sans glisser-
-                // déposer — réordonner un sous-ensemble filtré n'aurait pas
-                // de position cohérente dans la playlist complète.
-                if (_isSearching) {
-                  final List<PlaylistEditorEntry> results = list.where(_entryMatches).toList();
-                  if (results.isEmpty) {
-                    return const Center(child: Text('Aucun titre ne correspond à cette recherche.'));
-                  }
-                  return ListView.builder(
-                    keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                    itemCount: results.length,
-                    itemBuilder: (context, index) {
-                      final PlaylistEditorEntry entry = results[index];
-                      final Track? track = entry.track;
-                      return _EditorTile(
-                        key: ValueKey(entry.key),
-                        index: index,
-                        entry: entry,
-                        showDragHandle: false,
-                        onTap: track == null ? () => _openMissingActions(entry.missing!) : null,
-                        onLongPress:
-                            track != null ? () => _openTrackActions(track) : () => _openMissingActions(entry.missing!),
-                      );
-                    },
-                  );
-                }
-
-                final int missingCount = list.where((e) => e.isMissing).length;
-                return Column(
-                  children: [
-                    if (missingCount > 0)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                        child: Row(
-                          children: [
-                            Icon(Icons.info_outline, size: 18, color: Theme.of(context).colorScheme.outline),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                '$missingCount titre${missingCount > 1 ? 's' : ''} introuvable${missingCount > 1 ? 's' : ''} '
-                                '(grisé${missingCount > 1 ? 's' : ''}) : sauté${missingCount > 1 ? 's' : ''} à la lecture, '
-                                'associé${missingCount > 1 ? 's' : ''} automatiquement dès l\'ajout du fichier à ta bibliothèque.',
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ),
-                            ),
-                          ],
+            IconButton(
+              icon: const Icon(Icons.person_add_alt_outlined),
+              tooltip: 'Ajouter par artiste',
+              onPressed: _openAddByArtist,
+            ),
+            IconButton(
+              icon: _saving
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.save_outlined, semanticLabel: 'Enregistrer la playlist'),
+              onPressed: (_localOrder == null || _saving) ? null : _commit,
+            ),
+          ],
+        ),
+        body: Column(
+          children: [
+            if (playlist.value != null) _CoverHeader(playlist: playlist.value!, onPickImage: _pickCoverImage),
+            if (_searchEnabled && !_smartReorder)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(AppSpacing.m, 0, AppSpacing.m, AppSpacing.s),
+                child: TextField(
+                  controller: _searchController,
+                  textInputAction: TextInputAction.search,
+                  decoration: InputDecoration(
+                    prefixIcon: const Icon(Icons.search),
+                    hintText: 'Rechercher un titre ou un artiste',
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                    suffixIcon: _query.isEmpty
+                        ? null
+                        : IconButton(icon: const Icon(Icons.clear), tooltip: 'Effacer', onPressed: _clearSearch),
+                  ),
+                  onChanged: (value) => setState(() => _query = value),
+                ),
+              ),
+            Expanded(
+              child: entries.when(
+                data: (data) {
+                  final List<PlaylistEditorEntry> list = _localOrder!;
+                  if (list.isEmpty) {
+                    return const Center(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 32),
+                        child: Text(
+                          'Playlist vide — utilise "Ajouter par artiste" en haut de l\'écran pour lui ajouter des morceaux.',
+                          textAlign: TextAlign.center,
                         ),
                       ),
-                    Expanded(
-                      child: ReorderableListView.builder(
-                        // Poignée de drag explicite (voir _EditorTile) plutôt que le
-                        // comportement par défaut (glisser-déposer déclenché par un
-                        // appui long sur toute la tuile) : cette tuile a déjà son
-                        // propre `onLongPress` (ouvre TrackActionsSheet), et les deux
-                        // gestes en appui long entraient en conflit dans l'arène de
-                        // gestes — bug réel reproduit : le drag ne démarrait jamais
-                        // de façon fiable. Isoler le drag sur l'icône dédiée lève
-                        // l'ambiguïté.
-                        buildDefaultDragHandles: false,
-                        itemCount: list.length,
-                        onReorderItem: _reorder,
-                        itemBuilder: (context, index) {
-                          final PlaylistEditorEntry entry = list[index];
-                          final Track? track = entry.track;
-                          return _EditorTile(
-                            key: ValueKey(entry.key),
-                            index: index,
-                            entry: entry,
-                            // Titre grisé : appui simple ET long ouvrent ses
-                            // actions (associer / retirer) — il n'a pas d'autre
-                            // action principale, n'étant pas lisible.
-                            onTap: track == null ? () => _openMissingActions(entry.missing!) : null,
-                            onLongPress: track != null
-                                ? () => _openTrackActions(track)
-                                : () => _openMissingActions(entry.missing!),
-                          );
-                        },
+                    );
+                  }
+
+                  if (_smartReorder) return _smartReorderList(list);
+
+                  // Recherche active : simple liste filtrée, sans glisser-
+                  // déposer — réordonner un sous-ensemble filtré n'aurait pas
+                  // de position cohérente dans la playlist complète.
+                  if (_isSearching) {
+                    final List<PlaylistEditorEntry> results = list.where(_entryMatches).toList();
+                    if (results.isEmpty) {
+                      return const Center(child: Text('Aucun titre ne correspond à cette recherche.'));
+                    }
+                    return ListView.builder(
+                      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                      itemCount: results.length,
+                      itemBuilder: (context, index) {
+                        final PlaylistEditorEntry entry = results[index];
+                        final Track? track = entry.track;
+                        return _EditorTile(
+                          key: ValueKey(entry.key),
+                          index: index,
+                          entry: entry,
+                          showDragHandle: false,
+                          onTap: track == null ? () => _openMissingActions(entry.missing!) : null,
+                          onLongPress: track != null
+                              ? () => _openTrackActions(track)
+                              : () => _openMissingActions(entry.missing!),
+                        );
+                      },
+                    );
+                  }
+
+                  final int missingCount = list.where((e) => e.isMissing).length;
+                  return Column(
+                    children: [
+                      if (missingCount > 0)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                          child: Row(
+                            children: [
+                              Icon(Icons.info_outline, size: 18, color: Theme.of(context).colorScheme.outline),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  '$missingCount titre${missingCount > 1 ? 's' : ''} introuvable${missingCount > 1 ? 's' : ''} '
+                                  '(grisé${missingCount > 1 ? 's' : ''}) : sauté${missingCount > 1 ? 's' : ''} à la lecture, '
+                                  'associé${missingCount > 1 ? 's' : ''} automatiquement dès l\'ajout du fichier à ta bibliothèque.',
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      Expanded(
+                        child: ReorderableListView.builder(
+                          // Poignée de drag explicite (voir _EditorTile) plutôt que le
+                          // comportement par défaut (glisser-déposer déclenché par un
+                          // appui long sur toute la tuile) : cette tuile a déjà son
+                          // propre `onLongPress` (ouvre TrackActionsSheet), et les deux
+                          // gestes en appui long entraient en conflit dans l'arène de
+                          // gestes — bug réel reproduit : le drag ne démarrait jamais
+                          // de façon fiable. Isoler le drag sur l'icône dédiée lève
+                          // l'ambiguïté.
+                          buildDefaultDragHandles: false,
+                          itemCount: list.length,
+                          onReorderItem: _reorder,
+                          itemBuilder: (context, index) {
+                            final PlaylistEditorEntry entry = list[index];
+                            final Track? track = entry.track;
+                            return _EditorTile(
+                              key: ValueKey(entry.key),
+                              index: index,
+                              entry: entry,
+                              // Titre grisé : appui simple ET long ouvrent ses
+                              // actions (associer / retirer) — il n'a pas d'autre
+                              // action principale, n'étant pas lisible.
+                              onTap: track == null ? () => _openMissingActions(entry.missing!) : null,
+                              onLongPress: track != null
+                                  ? () => _openTrackActions(track)
+                                  : () => _openMissingActions(entry.missing!),
+                            );
+                          },
+                        ),
                       ),
-                    ),
-                  ],
-                );
-              },
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (error, _) => Center(child: Text('Erreur : $error')),
+                    ],
+                  );
+                },
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (error, _) => Center(child: Text('Erreur : $error')),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -511,6 +615,8 @@ class _CoverHeader extends StatelessWidget {
 }
 
 enum _MissingAction { link, remove }
+
+enum _LeaveChoice { save, savePartially, discard }
 
 class _EditorTile extends StatelessWidget {
   const _EditorTile({

@@ -9,18 +9,27 @@ import '../../../core/storage/database/app_database.dart';
 /// [isPendingPlacement] : morceau ajouté mais jamais réordonné manuellement
 /// dans l'éditeur (contour ambre tant que non commité) — toujours `false`
 /// pour un titre grisé.
+///
+/// [addedSinceSave] : morceau ajouté depuis le dernier enregistrement de
+/// l'éditeur (complet ou partiel) — toujours `false` pour un titre grisé.
 class PlaylistEditorEntry {
-  const PlaylistEditorEntry({required Track this.track, required this.isPendingPlacement, required this.position})
-      : missing = null;
+  const PlaylistEditorEntry({
+    required Track this.track,
+    required this.isPendingPlacement,
+    required this.position,
+    this.addedSinceSave = false,
+  }) : missing = null;
 
   PlaylistEditorEntry.missing(PlaylistMissingTrack this.missing)
       : track = null,
         isPendingPlacement = false,
+        addedSinceSave = false,
         position = missing.position;
 
   final Track? track;
   final PlaylistMissingTrack? missing;
   final bool isPendingPlacement;
+  final bool addedSinceSave;
   final int position;
 
   bool get isMissing => missing != null;

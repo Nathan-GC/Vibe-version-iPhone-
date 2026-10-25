@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/storage/database/app_database.dart';
 import '../../../core/storage/database/coalesced_watch.dart';
+import '../../../core/storage/database/track_repository.dart';
 import '../../../core/theme/vibe_engine/playlist_vibe_resolver.dart';
 import '../../../core/theme/vibe_engine/vibe_engine.dart';
 import '../domain/playlist_editor_entry.dart';
@@ -15,6 +16,30 @@ class DriftPlaylistRepository implements PlaylistRepository {
 
   @override
   Stream<List<Playlist>> watchAll() => _db.select(_db.playlists).watch();
+
+  /// Tri en SQL (le `List.sort` de Dart n'est pas stable) : positions
+  /// explicites d'abord, puis les jamais ordonnées (NULL) en ordre de création.
+  @override
+  Stream<List<Playlist>> watchCarousel() {
+    return (_db.select(_db.playlists)
+          ..where((p) => p.id.equals(kAllImportedPlaylistId).not())
+          ..orderBy([
+            (p) => OrderingTerm.asc(p.carouselPosition.isNull()),
+            (p) => OrderingTerm.asc(p.carouselPosition),
+            (p) => OrderingTerm.asc(const CustomExpression<int>('rowid')),
+          ]))
+        .watch();
+  }
+
+  @override
+  Future<void> reorderCarousel(List<String> orderedIds) {
+    return _db.transaction(() async {
+      for (int i = 0; i < orderedIds.length; i++) {
+        await (_db.update(_db.playlists)..where((p) => p.id.equals(orderedIds[i])))
+            .write(PlaylistsCompanion(carouselPosition: Value(i)));
+      }
+    });
+  }
 
   @override
   Stream<Playlist?> watchPlaylist(String playlistId) {
@@ -73,6 +98,7 @@ class DriftPlaylistRepository implements PlaylistRepository {
         PlaylistEditorEntry(
           track: row.readTable(_db.tracks),
           isPendingPlacement: row.readTable(_db.playlistTracks).isPendingPlacement,
+          addedSinceSave: row.readTable(_db.playlistTracks).addedSinceSave,
           position: row.readTable(_db.playlistTracks).position,
         ),
     ];
@@ -98,9 +124,28 @@ class DriftPlaylistRepository implements PlaylistRepository {
     ];
   }
 
+  /// Les lignes présentes en base mais absentes de [orderedEntries] (morceau
+  /// ajouté pendant que l'éditeur était ouvert) ne sont JAMAIS supprimées :
+  /// elles sont replacées après les entrées listées, dans leur ordre relatif
+  /// actuel, avec leurs drapeaux `is_pending_placement` / `added_since_save`
+  /// intacts.
+  ///
+  /// [keepPending] (enregistrement partiel) : chaque morceau listé conserve
+  /// l'état `is_pending_placement` de sa ligne actuelle en base (lue ici, pas
+  /// celle d'une entrée possiblement périmée) ; sinon il est purgé.
   @override
-  Future<void> commitOrder(String playlistId, List<PlaylistEditorEntry> orderedEntries) {
+  Future<void> commitOrder(String playlistId, List<PlaylistEditorEntry> orderedEntries, {bool keepPending = false}) {
     return _db.transaction(() async {
+      final List<PlaylistTrack> existing = await (_db.select(_db.playlistTracks)
+            ..where((t) => t.playlistId.equals(playlistId))
+            ..orderBy([(t) => OrderingTerm.asc(t.position)]))
+          .get();
+      final Map<String, PlaylistTrack> existingById = {for (final PlaylistTrack row in existing) row.trackId: row};
+      final Set<String> listedIds = {
+        for (final PlaylistEditorEntry entry in orderedEntries)
+          if (entry.track != null) entry.track!.id,
+      };
+
       await (_db.delete(_db.playlistTracks)..where((t) => t.playlistId.equals(playlistId))).go();
 
       final List<PlaylistTracksCompanion> rows = [];
@@ -108,21 +153,44 @@ class DriftPlaylistRepository implements PlaylistRepository {
         final PlaylistEditorEntry entry = orderedEntries[i];
         final Track? track = entry.track;
         if (track != null) {
+          // Retiré de la playlist pendant l'édition (liste noire, autre
+          // écran) : jamais ressuscité depuis une liste périmée.
+          if (!existingById.containsKey(track.id)) continue;
           rows.add(PlaylistTracksCompanion.insert(
             playlistId: playlistId,
             trackId: track.id,
             position: i,
-            isPendingPlacement: const Value(false),
+            isPendingPlacement: Value(keepPending && (existingById[track.id]?.isPendingPlacement ?? false)),
           ));
         } else {
           await (_db.update(_db.playlistMissingTracks)..where((m) => m.id.equals(entry.missing!.id)))
               .write(PlaylistMissingTracksCompanion(position: Value(i)));
         }
       }
+      int next = orderedEntries.length;
+      for (final PlaylistTrack leftover in existing) {
+        if (listedIds.contains(leftover.trackId)) continue;
+        rows.add(PlaylistTracksCompanion.insert(
+          playlistId: playlistId,
+          trackId: leftover.trackId,
+          position: next++,
+          isPendingPlacement: Value(leftover.isPendingPlacement),
+          addedSinceSave: Value(leftover.addedSinceSave),
+        ));
+      }
       if (rows.isNotEmpty) await _db.batch((batch) => batch.insertAll(_db.playlistTracks, rows));
 
       await _bumpVersion(playlistId);
     });
+  }
+
+  @override
+  Future<int> discardAdditionsSinceSave(String playlistId) {
+    // "Tous les titres importés" reste toujours la bibliothèque entière.
+    if (playlistId == kAllImportedPlaylistId) return Future.value(0);
+    return (_db.delete(_db.playlistTracks)
+          ..where((t) => t.playlistId.equals(playlistId) & t.addedSinceSave.equals(true)))
+        .go();
   }
 
   @override

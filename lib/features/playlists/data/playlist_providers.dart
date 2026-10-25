@@ -24,6 +24,12 @@ final StreamProvider<List<Playlist>> playlistsProvider = StreamProvider<List<Pla
   return ref.watch(playlistRepositoryProvider).watchAll();
 });
 
+/// Carrousel de "Mon espace" : ordre personnalisé, sans la sélection système
+/// "Tous les titres importés".
+final StreamProvider<List<Playlist>> carouselPlaylistsProvider = StreamProvider<List<Playlist>>((ref) {
+  return ref.watch(playlistRepositoryProvider).watchCarousel();
+});
+
 final playlistByIdProvider = StreamProvider.family<Playlist?, String>((ref, playlistId) {
   return ref.watch(playlistRepositoryProvider).watchPlaylist(playlistId);
 });
