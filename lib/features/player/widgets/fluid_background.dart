@@ -419,7 +419,10 @@ class _FluidPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (paintGradientBlobs) {
+    // "Aucune couleur" (Vibe Creator) : rien à peindre, le fond par défaut de
+    // l'app (Scaffold) ou l'image de fond personnalisée doit rester visible.
+    final bool noColor = colors.isNotEmpty && colors.every((color) => color.a == 0);
+    if (paintGradientBlobs && !noColor) {
       if (isSpaceNebula) {
         _paintNebula(canvas, size);
       } else {

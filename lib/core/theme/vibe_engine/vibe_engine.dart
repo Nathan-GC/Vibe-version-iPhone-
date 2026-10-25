@@ -198,6 +198,11 @@ class VibeVisual {
   // du Master Player (voir MasterPlayerScreen), jamais superposée à celui-ci.
   final String? customBackgroundVideoPath;
 
+  // "Aucune couleur" (Vibe Creator) : dégradé entièrement transparent — le
+  // rendu ne doit alors peindre aucun aplat opaque, pour laisser voir la
+  // vidéo/l'image de fond, ou le fond par défaut de l'app (Scaffold).
+  bool get hasNoBackgroundColor => gradientColors.isNotEmpty && gradientColors.every((color) => color.a == 0);
+
   // Égalité par valeur (bug QA "pochette qui clignote") : `resolvedVibe`
   // construit une nouvelle instance à chaque appel, donc sans `==`
   // `AnimatedVibeTheme` (ImplicitlyAnimatedWidget) voyait une "nouvelle"

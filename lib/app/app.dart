@@ -7,7 +7,7 @@ import '../core/platform/app_platform.dart';
 import '../core/purge/purge_providers.dart';
 import '../core/shared/onboarding_storage.dart';
 import '../core/theme/global_theme/global_theme.dart';
-import '../core/theme/vibe_engine/active_vibe_provider.dart';
+import '../core/theme/vibe_engine/active_vibe_provider.dart' show defaultVibeFor;
 import '../core/theme/vibe_engine/vibe_engine.dart';
 import '../features/library/data/documents_sync_controller.dart';
 import 'router.dart';
@@ -74,20 +74,23 @@ class _PlaylistAppState extends ConsumerState<PlaylistApp> {
   @override
   Widget build(BuildContext context) {
     final ThemeMode themeMode = ref.watch(globalThemeModeProvider);
-    final VibeVisual vibe = ref.watch(activeVibeProvider);
     final Color userAccent = ref.watch(userAccentColorProvider);
+    // Identité visuelle UNIQUE de l'app : mode clair/sombre + couleur principale
+    // des Réglages, jamais la Vibe de la playlist en cours de lecture (celle-ci
+    // ne teinte que le Lecteur et sa file d'attente, voir MasterPlayerScreen).
+    final VibeVisual identity = defaultVibeFor(userAccent);
 
     return MaterialApp.router(
       title: 'Vibe',
       debugShowCheckedModeBanner: false,
       themeMode: themeMode,
-      theme: applyVibe(buildLightTheme(seedColor: userAccent), vibe),
-      darkTheme: applyVibe(buildDarkTheme(seedColor: userAccent), vibe),
-      // Transitions fluides de Vibe (800ms) : `Theme.of(context)` ici est déjà
-      // résolu (clair/sombre) par MaterialApp à partir de `theme`/`darkTheme`
-      // ci-dessus — `AnimatedTheme` anime la BARRE DE NAVIGATION et le FOND
-      // DES CARTES vers cette cible au lieu d'y sauter, pour tout l'arbre en
-      // dessous de `child`.
+      theme: applyVibe(buildLightTheme(seedColor: userAccent), identity),
+      darkTheme: applyVibe(buildDarkTheme(seedColor: userAccent), identity),
+      // Transition fluide (800ms) lors d'un changement d'identité dans les
+      // Réglages : `Theme.of(context)` ici est déjà résolu (clair/sombre) par
+      // MaterialApp à partir de `theme`/`darkTheme` ci-dessus — `AnimatedTheme`
+      // anime la BARRE DE NAVIGATION et le FOND DES CARTES vers cette cible au
+      // lieu d'y sauter, pour tout l'arbre en dessous de `child`.
       builder: (context, child) => AnimatedTheme(
         data: Theme.of(context),
         duration: const Duration(milliseconds: 800),

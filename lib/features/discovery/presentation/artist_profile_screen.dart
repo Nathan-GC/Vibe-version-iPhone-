@@ -6,8 +6,6 @@ import '../../../core/shared/widgets/add_to_playlist_sheet.dart';
 import '../../../core/shared/widgets/online_track_card.dart';
 import '../../../core/shared/widgets/skeleton_loader.dart';
 import '../../../core/storage/database/app_database.dart';
-import '../../../core/theme/vibe_engine/active_vibe_provider.dart';
-import '../../../core/theme/vibe_engine/vibe_engine.dart';
 import '../data/artist_providers.dart';
 import '../domain/album_group.dart';
 import '../domain/artist_filter.dart';
@@ -144,7 +142,7 @@ class _TopTracksSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final AsyncValue<List<OnlineTrackResult>> topTracks = ref.watch(artistTopTracksProvider(artistName));
-    final VibeVisual vibe = ref.watch(activeVibeProvider);
+    final Color accent = Theme.of(context).colorScheme.primary;
 
     return topTracks.when(
       data: (allData) {
@@ -154,8 +152,7 @@ class _TopTracksSection extends ConsumerWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Morceaux populaires',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(color: vibe.accentColor)),
+            Text('Morceaux populaires', style: Theme.of(context).textTheme.titleMedium?.copyWith(color: accent)),
             const SizedBox(height: 8),
             ...data.map(
               (track) => OnlineTrackCard(track: track, onAdd: () => addOnlineTrackToPlaylist(context, ref, track)),
@@ -165,7 +162,7 @@ class _TopTracksSection extends ConsumerWidget {
       },
       loading: () => Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),
-        child: LinearProgressIndicator(color: vibe.accentColor),
+        child: LinearProgressIndicator(color: accent),
       ),
       // Discret : cette section est un bonus de découverte, pas une donnée
       // essentielle — inutile d'alarmer l'utilisateur si iTunes est indisponible.
@@ -184,7 +181,7 @@ class _DiscographySection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final AsyncValue<List<AlbumGroup>> albums = ref.watch(artistDiscographyProvider(artistName));
-    final VibeVisual vibe = ref.watch(activeVibeProvider);
+    final Color accent = Theme.of(context).colorScheme.primary;
 
     return albums.when(
       data: (data) {
@@ -192,7 +189,7 @@ class _DiscographySection extends ConsumerWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Discographie', style: Theme.of(context).textTheme.titleMedium?.copyWith(color: vibe.accentColor)),
+            Text('Discographie', style: Theme.of(context).textTheme.titleMedium?.copyWith(color: accent)),
             const SizedBox(height: 8),
             SizedBox(
               height: 190,
@@ -208,7 +205,7 @@ class _DiscographySection extends ConsumerWidget {
       },
       loading: () => Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),
-        child: LinearProgressIndicator(color: vibe.accentColor),
+        child: LinearProgressIndicator(color: accent),
       ),
       error: (_, __) => const SizedBox.shrink(),
     );

@@ -128,9 +128,8 @@ class _MasterPlayerScreenState extends ConsumerState<MasterPlayerScreen> with Si
       playlist = _lastResolvedPlaylist;
     }
     // Repli (playlist non résolue, ex. bref chargement après restauration à
-    // froid, bug critique QA) : même repli neutre que `activeVibeProvider`
-    // (couleur d'accent choisie par l'utilisateur en Réglages), pas un noir
-    // figé (`black87`) sans rapport — voir [defaultVibeFor].
+    // froid, bug critique QA) : `defaultVibeFor` (couleur d'accent choisie par
+    // l'utilisateur en Réglages), pas un noir figé (`black87`) sans rapport.
     final VibeVisual vibe = playlist?.resolvedVibe ?? defaultVibeFor(ref.watch(userAccentColorProvider));
 
     final Track? track = player.currentTrack;
@@ -161,25 +160,39 @@ class _MasterPlayerScreenState extends ConsumerState<MasterPlayerScreen> with Si
             // tout le PageView (Player + Queue) plutôt que la seule page 1 — la
             // Vibe reste donc visible et animée pendant le swipe vers la Queue
             // au lieu de disparaître derrière un fond vide.
-            final Widget pageView = PageView(
-              key: _pageViewKey,
-              children: [
-                _PlayerPage(
-                  tempoController: _tempoController,
-                  vibe: animatedVibe,
-                  player: player,
-                  coverKey: _coverKey,
-                  playlistCoverImagePath: playlistCoverImagePath,
-                ),
-                const QueueScreen(),
-              ],
+            //
+            // Identité visuelle : le thème de l'app est celui des Réglages
+            // (voir PlaylistApp) ; seuls le Lecteur et sa file d'attente sont
+            // reteintés ici avec la Vibe définie dans l'Espace perso, pour que
+            // leurs widgets Material (curseur, boutons, pistes sélectionnées...)
+            // y soient assortis sans déborder sur le reste de l'app.
+            final Widget pageView = Theme(
+              data: applyVibe(Theme.of(context), animatedVibe),
+              child: PageView(
+                key: _pageViewKey,
+                children: [
+                  _PlayerPage(
+                    tempoController: _tempoController,
+                    vibe: animatedVibe,
+                    player: player,
+                    coverKey: _coverKey,
+                    playlistCoverImagePath: playlistCoverImagePath,
+                  ),
+                  const QueueScreen(),
+                ],
+              ),
             );
 
             // Section 4.3 : une vidéo de fond personnalisée remplace
             // entièrement le shader/dégradé/effet — jamais superposée.
             final String? videoPath = animatedVibe.customBackgroundVideoPath;
             if (videoPath != null) {
-              return VibeVideoBackground(videoPath: videoPath, child: pageView);
+              return VibeVideoBackground(
+                videoPath: videoPath,
+                // "Aucune couleur" : pas d'aplat noir sous la vidéo.
+                backgroundColor: animatedVibe.hasNoBackgroundColor ? Colors.transparent : Colors.black,
+                child: pageView,
+              );
             }
 
             return FluidBackground(

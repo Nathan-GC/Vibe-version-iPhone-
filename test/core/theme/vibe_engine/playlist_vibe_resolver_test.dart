@@ -108,4 +108,55 @@ void main() {
       expect(playlist.resolvedVibe.showCoverImage, isFalse, reason: '$preset should honour the hidden cover');
     }
   });
+
+  Future<Playlist> insertCustom(String id, List<String> bg, {String accent = ''}) => insertPlaylist(
+        PlaylistsCompanion.insert(
+          id: id,
+          title: 'Test',
+          vibeStyle: const Value(VibePreset.custom),
+          bgColors: Value(bg),
+          customAccentColor: Value(accent),
+        ),
+      );
+
+  test('the transparent sentinel resolves to a transparent gradient with a non-transparent accent', () async {
+    final VibeVisual vibe = (await insertCustom('p1', ['00000000'])).resolvedVibe;
+
+    expect(vibe.hasNoBackgroundColor, isTrue);
+    expect(vibe.gradientColors.length, 2);
+    expect(vibe.accentColor.a, 1);
+    expect(vibe.accentColor, VibePreset.custom.accentColor);
+  });
+
+  test('the sentinel keeps an explicit accent', () async {
+    final VibeVisual vibe = (await insertCustom('p1', ['00000000'], accent: 'FF123456')).resolvedVibe;
+
+    expect(vibe.accentColor.toARGB32(), 0xFF123456);
+  });
+
+  test('an empty colour list still means the preset default (existing playlists unchanged)', () async {
+    final VibeVisual vibe = (await insertCustom('p1', [])).resolvedVibe;
+
+    expect(vibe.hasNoBackgroundColor, isFalse);
+    expect(vibe.gradientColors, VibePreset.custom.gradientColors);
+    expect(vibe.accentColor, VibePreset.custom.accentColor);
+  });
+
+  test('custom gradient colours keep the stored order', () async {
+    final VibeVisual ab = (await insertCustom('p1', ['FFFF0000', 'FF0000FF'])).resolvedVibe;
+    final VibeVisual ba = (await insertCustom('p2', ['FF0000FF', 'FFFF0000'])).resolvedVibe;
+
+    expect(ab.gradientColors.map((c) => c.toARGB32()), [0xFFFF0000, 0xFF0000FF]);
+    expect(ba.gradientColors.map((c) => c.toARGB32()), [0xFF0000FF, 0xFFFF0000]);
+    expect(ab.hasNoBackgroundColor, isFalse);
+    expect(ab.accentColor.toARGB32(), 0xFF0000FF);
+    expect(ba.accentColor.toARGB32(), 0xFFFF0000);
+  });
+
+  test('a single chosen colour resolves to a flat background of that colour, like the Vibe Creator preview', () async {
+    final VibeVisual vibe = (await insertCustom('p1', ['FF00FF00'])).resolvedVibe;
+
+    expect(vibe.gradientColors.map((c) => c.toARGB32()), [0xFF00FF00, 0xFF00FF00]);
+    expect(vibe.accentColor.toARGB32(), 0xFF00FF00);
+  });
 }

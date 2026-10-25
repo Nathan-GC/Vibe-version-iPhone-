@@ -8,13 +8,13 @@ import '../global_theme/global_theme.dart';
 import 'playlist_vibe_resolver.dart';
 import 'vibe_engine.dart';
 
-/// Vibe active de l'app ENTIÈRE (pas seulement le Player) : celle de la
-/// playlist en cours de lecture, sinon un repli sur la couleur principale
-/// choisie par l'utilisateur (Réglages — voir `userAccentColorProvider`),
-/// jamais une teinte fixe qui écraserait silencieusement ce choix. Consommée
-/// par `applyVibe` (global_theme.dart) pour reteinter le thème Material —
-/// fond, cartes, barre de navigation — sur les 3 tabs. Le fond Fluid du
-/// Player reste une couche additionnelle, plus élaborée, propre à cet écran.
+/// Vibe de la playlist en cours de lecture (sinon repli sur la couleur
+/// principale des Réglages — voir `userAccentColorProvider`). N'habille PLUS
+/// l'app : le thème global est l'identité visuelle des Réglages (mode + couleur
+/// principale, voir `PlaylistApp`), stable sur toutes les pages. Seuls des
+/// comportements liés à la lecture la consomment (ex. retour haptique, voir
+/// `VibeHapticService`) ; le Lecteur et sa file d'attente résolvent eux-mêmes
+/// la Vibe définie dans l'Espace perso (voir `MasterPlayerScreen`).
 final Provider<VibeVisual> activeVibeProvider = Provider<VibeVisual>((ref) {
   final VibeVisual defaultVibe = defaultVibeFor(ref.watch(userAccentColorProvider));
 

@@ -155,9 +155,11 @@ class _CustomVibeEditorState extends ConsumerState<_CustomVibeEditor> {
   void initState() {
     super.initState();
     final VibeVisual current = widget.playlist.resolvedVibe;
-    _selectedColors = widget.playlist.vibeStyle == VibePreset.custom
-        ? List.of(current.gradientColors)
-        : [_swatchChoices[0], _swatchChoices[5]];
+    // "Aucune couleur" : liste vide dans l'éditeur (stockée sous forme de
+    // sentinelle transparente, voir `kNoVibeColor`).
+    _selectedColors = widget.playlist.vibeStyle != VibePreset.custom
+        ? [_swatchChoices[0], _swatchChoices[5]]
+        : (current.hasNoBackgroundColor ? <Color>[] : List.of(current.gradientColors));
     _selectedAccentColor = current.accentColor;
     _selectedEffect = current.effect;
     _showCoverImage = widget.playlist.showCoverImage;
@@ -199,6 +201,18 @@ class _CustomVibeEditorState extends ConsumerState<_CustomVibeEditor> {
     }
     setState(() => _selectedAccentColor = color);
     _accentHexController.clear();
+  }
+
+  /// Option exclusive "Aucune couleur" : vide le dégradé (fond transparent) ;
+  /// choisir ensuite une couleur la désélectionne (voir [_toggleColor]).
+  void _selectNoColor() => setState(() => _selectedColors = []);
+
+  /// Réordonne les couleurs sélectionnées : l'ordre = l'ordre du dégradé.
+  void _reorderColors(int oldIndex, int newIndex) {
+    setState(() {
+      final Color moved = _selectedColors.removeAt(oldIndex);
+      _selectedColors.insert(newIndex, moved);
+    });
   }
 
   void _toggleColor(Color color) {
@@ -259,7 +273,7 @@ class _CustomVibeEditorState extends ConsumerState<_CustomVibeEditor> {
 
       await ref.read(playlistRepositoryProvider).updateCustomVibe(
             widget.playlistId,
-            colors: _selectedColors,
+            colors: _selectedColors.isEmpty ? const [kNoVibeColor] : _selectedColors,
             accentColor: _selectedAccentColor,
             backgroundImagePath: backgroundImagePath,
             effect: _selectedEffect,
@@ -303,7 +317,13 @@ class _CustomVibeEditorState extends ConsumerState<_CustomVibeEditor> {
               height: 56,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(10),
-                gradient: LinearGradient(colors: _selectedColors),
+                // LinearGradient exige au moins 2 couleurs : "Aucune couleur"
+                // s'affiche transparent, une couleur seule en aplat.
+                gradient: LinearGradient(
+                  colors: _selectedColors.isEmpty
+                      ? const [kNoVibeColor, kNoVibeColor]
+                      : (_selectedColors.length == 1 ? [..._selectedColors, ..._selectedColors] : _selectedColors),
+                ),
                 image: hasExistingImage || _pendingImagePath != null
                     ? DecorationImage(
                         image: _pendingImagePath != null
@@ -318,6 +338,58 @@ class _CustomVibeEditorState extends ConsumerState<_CustomVibeEditor> {
             const SizedBox(height: 12),
             Text('Couleurs du dégradé (2 max)', style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 8),
+            Semantics(
+              button: true,
+              selected: _selectedColors.isEmpty,
+              label: 'Aucune couleur : fond transparent',
+              excludeSemantics: true,
+              onTap: _selectNoColor,
+              child: ChoiceChip(
+                avatar: const Icon(Icons.format_color_reset_outlined, size: 18),
+                label: const Text('Aucune couleur'),
+                selected: _selectedColors.isEmpty,
+                onSelected: (_) => _selectNoColor(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (_selectedColors.length == 2) ...[
+              Text('Ordre du dégradé (appui long, puis glisser)', style: Theme.of(context).textTheme.bodySmall),
+              const SizedBox(height: 4),
+              SizedBox(
+                height: 44,
+                width: 2 * 44.0 + 8,
+                child: ReorderableListView(
+                  scrollDirection: Axis.horizontal,
+                  buildDefaultDragHandles: false,
+                  onReorderItem: _reorderColors,
+                  children: [
+                    for (int i = 0; i < _selectedColors.length; i++)
+                      ReorderableDelayedDragStartListener(
+                        // Clé stable par couleur (jamais deux fois la même, voir
+                        // [_toggleColor]) : l'index changerait à chaque déplacement.
+                        key: ValueKey(_selectedColors[i].toARGB32()),
+                        index: i,
+                        child: Semantics(
+                          label: 'Couleur ${i + 1} sur 2 du dégradé, appui long puis glisser pour réordonner',
+                          child: Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: _selectedColors[i],
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Theme.of(context).colorScheme.onSurface, width: 2),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
             Wrap(
               spacing: 10,
               runSpacing: 10,

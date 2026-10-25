@@ -14,8 +14,6 @@ import '../../../core/shared/widgets/track_actions_sheet.dart';
 import '../../../core/storage/database/app_database.dart';
 import '../../../core/theme/design_system/app_spacing.dart';
 import '../../../core/theme/design_system/vibe_design_system.dart';
-import '../../../core/theme/vibe_engine/active_vibe_provider.dart';
-import '../../../core/theme/vibe_engine/vibe_engine.dart';
 import '../../playlists/data/playlist_providers.dart';
 import '../data/artist_providers.dart';
 import '../data/autocomplete_providers.dart';
@@ -133,7 +131,8 @@ class _DiscoveryScreenState extends ConsumerState<DiscoveryScreen> {
 
 /// Menu déroulant d'autocomplétion (Google/Spotify-style) : matchs locaux
 /// d'abord, puis en ligne, puis un repli "Rechercher '...'" — stylisé selon
-/// la Vibe active (fond semi-translucide, icônes teintées à l'accent).
+/// l'identité visuelle des Réglages (fond semi-translucide, icônes teintées à
+/// la couleur principale).
 /// [onSelect] remplit le champ ET soumet ; pour un artiste, on navigue
 /// directement vers son profil à la place (fiche existante, plus utile
 /// qu'un simple remplissage de champ).
@@ -145,7 +144,7 @@ class _AutocompletePanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final AsyncValue<List<AutocompleteSuggestion>> suggestions = ref.watch(autocompleteSuggestionsProvider);
-    final VibeVisual vibe = ref.watch(activeVibeProvider);
+    final Color accent = Theme.of(context).colorScheme.primary;
 
     return Container(
       color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.92),
@@ -167,18 +166,18 @@ class _AutocompletePanel extends ConsumerWidget {
             children: [
               if (artists.isNotEmpty) _AutocompleteSectionHeader('Artistes'),
               for (final suggestion in artists)
-                _AutocompleteTile(suggestion: suggestion, accentColor: vibe.accentColor, onSelect: onSelect),
+                _AutocompleteTile(suggestion: suggestion, accentColor: accent, onSelect: onSelect),
               if (tracks.isNotEmpty) _AutocompleteSectionHeader('Titres'),
               for (final suggestion in tracks)
-                _AutocompleteTile(suggestion: suggestion, accentColor: vibe.accentColor, onSelect: onSelect),
+                _AutocompleteTile(suggestion: suggestion, accentColor: accent, onSelect: onSelect),
               for (final suggestion in rest)
-                _AutocompleteTile(suggestion: suggestion, accentColor: vibe.accentColor, onSelect: onSelect),
+                _AutocompleteTile(suggestion: suggestion, accentColor: accent, onSelect: onSelect),
             ],
           );
         },
         loading: () => Padding(
           padding: const EdgeInsets.all(16),
-          child: LinearProgressIndicator(color: vibe.accentColor),
+          child: LinearProgressIndicator(color: accent),
         ),
         error: (error, _) => const SizedBox.shrink(),
       ),
@@ -345,9 +344,9 @@ class _SuggestionsPanel extends ConsumerWidget {
 /// l'artiste n'a aucun morceau local (jamais les extraits en ligne 30s, qui
 /// ne sont lus qu'à la demande explicite — voir ArtistProfileScreen). Id de
 /// playlist synthétique (aucune ligne `Playlists` correspondante, voir
-/// [TopArtistPlaylist]) : la Vibe retombe simplement sur le repli neutre
-/// (voir `activeVibeProvider`), sans incidence puisque Découverte n'a jamais
-/// d'effet sur la Vibe.
+/// [TopArtistPlaylist]) : le Lecteur retombe simplement sur le repli neutre
+/// (voir `defaultVibeFor`) ; l'identité visuelle de l'app, elle, ne dépend
+/// jamais de la lecture en cours.
 ///
 /// Bug QA "le tap ne lance la lecture qu'après un appui long" : l'ancienne
 /// version attendait `ref.read(artistTracksProvider(...).future)`. Sans

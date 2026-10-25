@@ -9,9 +9,8 @@ import '../vibe_engine/vibe_engine.dart';
 import 'theme_preferences_storage.dart';
 
 /// Palette de couleurs principales proposée dans Réglages (carrousel
-/// horizontal façon Spotify) — sert de teinte de base (`ColorScheme.fromSeed`)
-/// tant qu'aucune Vibe de playlist n'est active pour la reteinter (voir
-/// [applyVibe]).
+/// horizontal façon Spotify) — teinte de base (`ColorScheme.fromSeed`) de
+/// l'identité visuelle de toute l'app (voir [applyVibe]).
 const List<Color> kAccentColorChoices = [
   Color(0xFF1DB954), // vert Spotify — repli par défaut, familier de l'UX visée.
   Color(0xFF9B51E0),
@@ -51,9 +50,9 @@ final NotifierProvider<GlobalThemeMode, ThemeMode> globalThemeModeProvider =
     NotifierProvider<GlobalThemeMode, ThemeMode>(GlobalThemeMode.new);
 
 /// Couleur principale choisie par l'utilisateur (Réglages > carrousel de
-/// couleurs) — seed de base de [buildLightTheme]/[buildDarkTheme] tant
-/// qu'aucune Vibe de playlist n'est active pour la surclasser (voir
-/// [applyVibe], toujours appelé par-dessus dans `PlaylistApp.build`).
+/// couleurs) — seed de [buildLightTheme]/[buildDarkTheme], donc de l'identité
+/// visuelle stable de toute l'app (la Vibe d'une playlist ne reteinte que le
+/// Lecteur, voir `MasterPlayerScreen`).
 class UserAccentColor extends Notifier<Color> {
   final ThemePreferencesStorage _storage = ThemePreferencesStorage();
 
@@ -136,7 +135,7 @@ ThemeData buildLightTheme({Color seedColor = const Color(0xFF1DB954)}) {
 
 /// Fond `#121212` façon Spotify (voir `kSpotifyDarkBackground`) plutôt que le
 /// gris Material 3 par défaut — [applyVibe] blend ensuite l'accent de la Vibe
-/// active par-dessus, exactement comme pour le thème clair.
+/// par-dessus, exactement comme pour le thème clair.
 ThemeData buildDarkTheme({Color seedColor = const Color(0xFF1DB954)}) {
   final ThemeData base = ThemeData(
     brightness: Brightness.dark,
@@ -149,13 +148,15 @@ ThemeData buildDarkTheme({Color seedColor = const Color(0xFF1DB954)}) {
   );
 }
 
-/// Reteinte [base] avec la Vibe active (voir active_vibe_provider.dart) :
+/// Reteinte [base] avec l'accent de [vibe] — l'identité des Réglages pour le
+/// thème de l'app (voir `PlaylistApp`), la Vibe de la playlist pour le Lecteur
+/// (voir `MasterPlayerScreen`) :
 /// `ColorScheme.fromSeed` dérive une palette harmonieuse et suffisamment
 /// contrastée à partir de l'accent choisi, qui irrigue automatiquement AppBar,
 /// Card, NavigationBar, boutons... (comportement par défaut de Material 3,
 /// aucune sous-config à dupliquer). Le fond reçoit en plus une légère teinte
-/// de la même couleur pour que l'ensemble de l'app — pas seulement le Player —
-/// se ressente comme habillé par la Vibe active.
+/// de la même couleur pour que l'ensemble de l'écran se ressente comme habillé
+/// par cet accent.
 ThemeData applyVibe(ThemeData base, VibeVisual vibe) {
   final ColorScheme scheme = ColorScheme.fromSeed(seedColor: vibe.accentColor, brightness: base.brightness);
   return base.copyWith(
