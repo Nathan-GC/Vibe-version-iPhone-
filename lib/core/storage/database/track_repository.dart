@@ -299,11 +299,14 @@ class TrackRepository {
         .then((row) => row != null);
     if (alreadyLinked) return;
 
-    final countExp = _db.playlistTracks.trackId.count();
+    // Position suivant la plus grande occupée, pas le nombre de lignes : après
+    // la suppression d'un morceau, le compte retombait sur une position déjà
+    // prise et l'ordre de la playlist devenait imprévisible (v1.3.7).
+    final maxExp = _db.playlistTracks.position.max();
     final positionQuery = _db.selectOnly(_db.playlistTracks)
-      ..addColumns([countExp])
+      ..addColumns([maxExp])
       ..where(_db.playlistTracks.playlistId.equals(kAllImportedPlaylistId));
-    final int nextPosition = await positionQuery.getSingle().then((row) => row.read(countExp) ?? 0);
+    final int nextPosition = await positionQuery.getSingle().then((row) => (row.read(maxExp) ?? -1) + 1);
 
     await _db.into(_db.playlistTracks).insert(
           PlaylistTracksCompanion.insert(

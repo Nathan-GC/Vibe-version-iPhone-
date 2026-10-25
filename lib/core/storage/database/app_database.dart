@@ -209,6 +209,10 @@ class Playlists extends Table {
   // toutes les Vibes depuis la v1.2 — voir VibeCustomizerScreen) : visible
   // par défaut (`true`).
   BoolColumn get showCoverImage => boolean().withDefault(const Constant(true))();
+  // Ordre des cartes dans le carrousel de l'Espace Personnel (v1.3.7). Null :
+  // pas encore ordonnée — affichée après les playlists ordonnées, dans l'ordre
+  // de création.
+  IntColumn get carouselPosition => integer().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -222,6 +226,9 @@ class PlaylistTracks extends Table {
   TextColumn get trackId => text().references(Tracks, #id)();
   IntColumn get position => integer()();
   BoolColumn get isPendingPlacement => boolean().withDefault(const Constant(true))();
+  // True pour un morceau ajouté à la playlist depuis la dernière sauvegarde de
+  // l'éditeur (v1.3.7) — remis à false par une sauvegarde, complète ou partielle.
+  BoolColumn get addedSinceSave => boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {playlistId, trackId};
@@ -292,7 +299,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 18;
+  int get schemaVersion => 19;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -433,6 +440,12 @@ class AppDatabase extends _$AppDatabase {
                 ],
               );
             }
+          }
+          if (from < 19) {
+            // Carrousel ordonné et ajouts non sauvegardés (v1.3.7) : deux
+            // colonnes additives, les lignes existantes gardent null / false.
+            await m.addColumn(playlists, playlists.carouselPosition);
+            await m.addColumn(playlistTracks, playlistTracks.addedSinceSave);
           }
         },
       );

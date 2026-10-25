@@ -191,4 +191,19 @@ void main() {
     ]);
     expect(rows.last.lastModifiedEpochMs, 2, reason: 'pas relu à chaque scan');
   });
+
+  test('a track imported after a removal goes after the highest position of "Tous les titres importés"', () async {
+    for (final String id in ['t1', 't2', 't3']) {
+      await repository.upsertTrack(scannedTrack(id: id, artists: ['A']));
+    }
+    await repository.removeFromLibrary(['t2']); // positions restantes : 0 et 2
+
+    await repository.upsertTrack(scannedTrack(id: 't4', artists: ['A']));
+
+    final List<PlaylistTrack> rows = await (db.select(db.playlistTracks)
+          ..where((t) => t.playlistId.equals(kAllImportedPlaylistId))
+          ..orderBy([(t) => OrderingTerm.asc(t.position)]))
+        .get();
+    expect(rows.map((r) => (r.trackId, r.position)), [('t1', 0), ('t3', 2), ('t4', 3)]);
+  });
 }

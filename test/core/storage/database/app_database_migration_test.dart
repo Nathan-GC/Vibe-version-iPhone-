@@ -16,6 +16,14 @@ void main() {
   });
   tearDown(() => dir.deleteSync(recursive: true));
 
+  /// Les bases "héritées" des tests sont créées au schéma courant : on leur
+  /// retire les colonnes ajoutées en v19 pour que la migration puisse les
+  /// recréer (sinon `ADD COLUMN` échoue sur une colonne déjà présente).
+  Future<void> dropV19Columns(AppDatabase legacy) async {
+    await legacy.customStatement('ALTER TABLE playlists DROP COLUMN carousel_position');
+    await legacy.customStatement('ALTER TABLE playlist_tracks DROP COLUMN added_since_save');
+  }
+
   test('upgrading from v12 keeps what users saw and remaps the retired forced-done status', () async {
     // Base "v12" : schéma identique pour ces tables, données héritées écrites
     // en SQL brut (valeur d'enum retirée), puis user_version ramené à 12.
@@ -35,6 +43,7 @@ void main() {
         id: 'space', title: 'Space', vibeStyle: const Value(VibePreset.oled), showCoverImage: const Value(false)));
     await legacy.into(legacy.playlists).insert(PlaylistsCompanion.insert(
         id: 'retro', title: 'Retro', vibeStyle: const Value(VibePreset.retro), showCoverImage: const Value(false)));
+    await dropV19Columns(legacy);
     await legacy.customStatement('PRAGMA user_version = 12');
     await legacy.close();
 
@@ -77,6 +86,7 @@ void main() {
           [row.value.$1, row.value.$2, row.key],
         );
       }
+      await dropV19Columns(legacy);
       await legacy.customStatement('PRAGMA user_version = $legacyVersion');
       await legacy.close();
       final AppDatabase upgraded = AppDatabase.forTesting(NativeDatabase(dbFile));
@@ -123,6 +133,7 @@ void main() {
           id: 'ambiguous', title: 'x', album: '', artists: const ['A'], durationSeconds: 180, filePath: '/m/x.mp3'));
       await legacy.customStatement(
           "UPDATE tracks SET cover_art_path = 'https://i.ytimg.com/vi/x/0.jpg', requires_user_review = 1 WHERE id = 'ambiguous'");
+      await dropV19Columns(legacy);
       await legacy.customStatement('PRAGMA user_version = 15');
       await legacy.close();
       final AppDatabase db = AppDatabase.forTesting(NativeDatabase(dbFile));
@@ -150,6 +161,7 @@ void main() {
     await legacy.into(legacy.tracks).insert(TracksCompanion.insert(
         id: 't1', title: 'Kept', album: '', artists: const ['A'], durationSeconds: 180, filePath: '/m/t1.mp3'));
     await legacy.customStatement('DROP TABLE blacklisted_tracks');
+    await dropV19Columns(legacy);
     await legacy.customStatement('PRAGMA user_version = 16');
     await legacy.close();
 
@@ -181,6 +193,7 @@ void main() {
         album: const Value('Discovery'),
         sanitizedKey: 'one-more-time_discovery_daft-punk',
         matchKey: 'one more time|daft punk'));
+    await dropV19Columns(legacy);
     await legacy.customStatement('PRAGMA user_version = 17');
     await legacy.close();
 
@@ -193,5 +206,30 @@ void main() {
       ('夜に駆ける__yoasobi', '夜に駆ける|yoasobi'),
       ('one-more-time_discovery_daft-punk', 'one more time|daft punk'),
     ]);
+  });
+
+  test('upgrading from v18 adds the carousel position and the unsaved-add flag, existing rows keep null / false',
+      () async {
+    final AppDatabase legacy = AppDatabase.forTesting(NativeDatabase(dbFile));
+    await legacy.into(legacy.playlists).insert(PlaylistsCompanion.insert(id: 'p', title: 'Mix'));
+    await legacy.into(legacy.tracks).insert(TracksCompanion.insert(
+        id: 't1', title: 'Kept', album: '', artists: const ['A'], durationSeconds: 180, filePath: '/m/t1.mp3'));
+    await legacy
+        .into(legacy.playlistTracks)
+        .insert(PlaylistTracksCompanion.insert(playlistId: 'p', trackId: 't1', position: 0));
+    await dropV19Columns(legacy);
+    await legacy.customStatement('PRAGMA user_version = 18');
+    await legacy.close();
+
+    final AppDatabase upgraded = AppDatabase.forTesting(NativeDatabase(dbFile));
+    addTearDown(upgraded.close);
+
+    final Playlist playlist = await upgraded.select(upgraded.playlists).getSingle();
+    expect(playlist.title, 'Mix');
+    expect(playlist.carouselPosition, equals(null));
+    final PlaylistTrack entry = await upgraded.select(upgraded.playlistTracks).getSingle();
+    expect(entry.trackId, 't1');
+    expect(entry.position, 0);
+    expect(entry.addedSinceSave, isFalse);
   });
 }

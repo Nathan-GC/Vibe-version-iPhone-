@@ -2,6 +2,18 @@ import 'package:drift/drift.dart';
 
 import '../../../core/storage/database/app_database.dart';
 
+/// Issue de [PlaylistTrackRepository.addTrack].
+enum AddTrackResult {
+  /// Morceau inséré en dernière position de la playlist.
+  added,
+
+  /// Morceau déjà dans la playlist : rien n'est écrit, sa position est conservée.
+  alreadyPresent,
+
+  /// Id absent de la bibliothèque (supprimé ou en liste noire) : rien n'est écrit.
+  notInLibrary,
+}
+
 /// Ajout direct d'un morceau local à une playlist — utilisé par le mode "Dans
 /// ma bibliothèque" du moteur de suggestions (Étape 4) : le fichier est déjà
 /// présent sur l'appareil, donc l'insertion est instantanée (0 latence réseau).
@@ -15,13 +27,30 @@ class PlaylistTrackRepository {
   /// Lecture de la position suivante + insertion dans UNE transaction (Lot
   /// 1.1) : Drift sérialise les transactions, deux ajouts simultanés ("J'aime"
   /// et "Ajouter à une playlist") ne peuvent plus obtenir la même position.
-  Future<void> addTrack(String playlistId, String trackId) {
+  ///
+  /// Un morceau déjà présent n'est jamais réécrit (l'ancien upsert le
+  /// renvoyait en fin de playlist) : [AddTrackResult.alreadyPresent], position
+  /// inchangée. Un ajout est marqué `added_since_save` jusqu'à la prochaine
+  /// sauvegarde de l'éditeur.
+  Future<AddTrackResult> addTrack(String playlistId, String trackId) {
     return _db.transaction(() async {
-      if ((await _inLibrary([trackId])).isEmpty) return;
+      if ((await _inLibrary([trackId])).isEmpty) return AddTrackResult.notInLibrary;
+      final bool present = await (_db.selectOnly(_db.playlistTracks)
+            ..addColumns([_db.playlistTracks.trackId])
+            ..where(_db.playlistTracks.playlistId.equals(playlistId) & _db.playlistTracks.trackId.equals(trackId)))
+          .get()
+          .then((rows) => rows.isNotEmpty);
+      if (present) return AddTrackResult.alreadyPresent;
       final int nextPosition = await _nextPosition(playlistId);
-      await _db.into(_db.playlistTracks).insertOnConflictUpdate(
-            PlaylistTracksCompanion.insert(playlistId: playlistId, trackId: trackId, position: nextPosition),
+      await _db.into(_db.playlistTracks).insert(
+            PlaylistTracksCompanion.insert(
+              playlistId: playlistId,
+              trackId: trackId,
+              position: nextPosition,
+              addedSinceSave: const Value(true),
+            ),
           );
+      return AddTrackResult.added;
     });
   }
 
@@ -49,7 +78,12 @@ class PlaylistTrackRepository {
       await _db.batch((batch) {
         batch.insertAll(_db.playlistTracks, [
           for (final trackId in toAdd)
-            PlaylistTracksCompanion.insert(playlistId: playlistId, trackId: trackId, position: nextPosition++),
+            PlaylistTracksCompanion.insert(
+              playlistId: playlistId,
+              trackId: trackId,
+              position: nextPosition++,
+              addedSinceSave: const Value(true),
+            ),
         ]);
       });
       return toAdd.length;
