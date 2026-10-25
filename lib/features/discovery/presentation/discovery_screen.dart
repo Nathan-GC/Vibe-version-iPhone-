@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/audio_engine/player_controller.dart';
+import '../../../core/navigation/active_tab_provider.dart';
 import '../../../core/shared/widgets/add_to_playlist_sheet.dart';
 import '../../../core/shared/widgets/online_track_card.dart';
 import '../../../core/shared/widgets/playlist_card.dart';
@@ -15,6 +16,7 @@ import '../../../core/storage/database/app_database.dart';
 import '../../../core/theme/design_system/app_spacing.dart';
 import '../../../core/theme/design_system/vibe_design_system.dart';
 import '../../playlists/data/playlist_providers.dart';
+import '../../playlists/domain/playlist_category.dart';
 import '../data/artist_providers.dart';
 import '../data/autocomplete_providers.dart';
 import '../data/search_providers.dart';
@@ -75,8 +77,20 @@ class _DiscoveryScreenState extends ConsumerState<DiscoveryScreen> {
     FocusScope.of(context).unfocus();
   }
 
+  /// Remet la recherche à zéro : champ, requête soumise (résultats) et requêtes
+  /// d'autocomplétion — on retrouve ainsi les carrousels au retour sur l'onglet.
+  void _resetSearch() {
+    _debounceTimer?.cancel();
+    _controller.clear();
+    ref.read(liveQueryProvider.notifier).set('');
+    ref.read(debouncedAutocompleteQueryProvider.notifier).set('');
+    ref.read(searchQueryProvider.notifier).set('');
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Changement d'onglet (par n'importe quel chemin) : recherche vidée.
+    ref.listen<int>(activeTabIndexProvider, (previous, next) => _resetSearch());
     final AsyncValue<List<SearchResult>> results = ref.watch(searchResultsProvider);
     final String activeQuery = ref.watch(searchQueryProvider);
     final String liveQuery = ref.watch(liveQueryProvider);
@@ -261,44 +275,14 @@ class _SuggestionsPanel extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final AsyncValue<List<Playlist>> playlists = ref.watch(playlistsProvider);
     final AsyncValue<List<TopArtistPlaylist>> topArtists = ref.watch(topArtistPlaylistsProvider);
 
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 16),
       children: [
-        playlists.maybeWhen(
-          data: (data) => data.isEmpty
-              ? const SizedBox.shrink()
-              : Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 16),
-                        child: Text('Tes playlists', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                      ),
-                      const SizedBox(height: AppSpacing.s),
-                      SizedBox(
-                        height: 220,
-                        child: ListView.separated(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          scrollDirection: Axis.horizontal,
-                          itemCount: data.length,
-                          separatorBuilder: (context, index) => const SizedBox(width: AppSpacing.m),
-                          itemBuilder: (context, index) => PlaylistCard(
-                            playlist: data[index],
-                            onTap: () => playPlaylistAndNavigate(context, ref, data[index]),
-                            onLongPress: () => context.push('/space/playlist/${data[index].id}/edit'),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-          orElse: () => const SizedBox.shrink(),
-        ),
+        const _PlaylistFamilyCarousel(title: 'Mes playlists', category: PlaylistCategory.created),
+        const _PlaylistFamilyCarousel(title: 'Playlists auto', category: PlaylistCategory.auto),
+        const _PlaylistFamilyCarousel(title: 'Playlists importées', category: PlaylistCategory.imported),
         topArtists.when(
           data: (data) => data.isEmpty
               ? const SizedBox.shrink()
@@ -309,8 +293,7 @@ class _SuggestionsPanel extends ConsumerWidget {
                     children: [
                       const Padding(
                         padding: EdgeInsets.symmetric(horizontal: 16),
-                        child:
-                            Text("Suggestions d'artistes", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        child: Text('Playlists artistes', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                       ),
                       const SizedBox(height: AppSpacing.s),
                       SizedBox(
@@ -333,6 +316,49 @@ class _SuggestionsPanel extends ConsumerWidget {
           error: (error, _) => const SizedBox.shrink(),
         ),
       ],
+    );
+  }
+}
+
+/// Carrousel d'une famille de playlists (même ordre que l'Espace perso) ; masqué
+/// tant que la famille est vide. Appui simple = lecture, appui long = titres de
+/// la playlist (éditeur).
+class _PlaylistFamilyCarousel extends ConsumerWidget {
+  const _PlaylistFamilyCarousel({required this.title, required this.category});
+
+  final String title;
+  final PlaylistCategory category;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final List<Playlist> data = ref.watch(carouselByCategoryProvider(category)).value ?? const [];
+    if (data.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          ),
+          const SizedBox(height: AppSpacing.s),
+          SizedBox(
+            height: 220,
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              scrollDirection: Axis.horizontal,
+              itemCount: data.length,
+              separatorBuilder: (context, index) => const SizedBox(width: AppSpacing.m),
+              itemBuilder: (context, index) => PlaylistCard(
+                playlist: data[index],
+                onTap: () => playPlaylistAndNavigate(context, ref, data[index]),
+                onLongPress: () => context.push('/space/playlist/${data[index].id}/edit'),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

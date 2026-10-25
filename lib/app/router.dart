@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/audio_engine/player_immersive_mode_provider.dart';
+import '../core/navigation/active_tab_provider.dart';
 import '../core/navigation/shell_route_visibility.dart';
 import '../core/platform/app_platform.dart';
 import '../core/system/focus_keep_screen_on.dart';
@@ -134,6 +135,12 @@ class _TabShell extends ConsumerWidget {
     // coque, voir FocusKeepScreenOnController.
     ref.watch(focusKeepScreenOnProvider);
     final bool onPlayerTab = navigationShell.currentIndex == _playerTabIndex;
+    // Publie l'onglet actif (la Recherche se réinitialise à chaque changement).
+    // Écriture différée : un provider ne se modifie pas pendant un build.
+    final int currentTab = navigationShell.currentIndex;
+    if (ref.read(activeTabIndexProvider) != currentTab) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => ref.read(activeTabIndexProvider.notifier).set(currentTab));
+    }
     // Retest QA (61b5cf1) : barre d'état masquée DANS les Paramètres. Les
     // sous-pages (/settings, fiche artiste...) sont poussées sur le Navigator
     // racine par-dessus cette coque, sans changer `currentIndex` : "onglet
@@ -169,6 +176,7 @@ class _TabShell extends ConsumerWidget {
             ref.read(playerImmersiveModeProvider.notifier).set(false);
           }
           navigationShell.goBranch(_playerTabIndex);
+          ref.read(activeTabIndexProvider.notifier).set(_playerTabIndex);
           // Déclencheur 3 : retour vers l'onglet Lecteur depuis le bouton
           // Retour Android — réapplique immédiatement plutôt que de compter
           // sur une reconstruction ultérieure de `_TabShell`.
@@ -223,6 +231,10 @@ class _TabShell extends ConsumerWidget {
                         ref.read(playerImmersiveModeProvider.notifier).set(false);
                       }
                       navigationShell.goBranch(index);
+                      // Onglet publié tout de suite (la Recherche se vide),
+                      // sans attendre la reconstruction de la coque — même
+                      // raison que le Déclencheur 4 ci-dessous.
+                      ref.read(activeTabIndexProvider.notifier).set(index);
                       // Déclencheur 4 : bascule d'onglet via la barre de
                       // navigation — le point d'entrée le plus courant pour
                       // "revenir sur l'onglet Lecteur en mode Focus" (retest
