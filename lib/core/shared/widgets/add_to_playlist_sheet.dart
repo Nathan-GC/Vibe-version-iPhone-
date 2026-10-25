@@ -2,8 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../storage/database/app_database.dart';
+import '../../storage/database/track_repository.dart';
 import '../../theme/vibe_engine/vibe_engine.dart';
 import '../../../features/playlists/data/playlist_providers.dart';
+import '../../../features/playlists/data/playlist_track_repository.dart';
+
+/// Tronque un titre à [maxLength] caractères, suivi de « … » s'il est plus long.
+/// Compté en caractères visibles (`characters`) : couper au milieu d'un emoji
+/// laissait un « � » dans le snackbar.
+String truncateTitle(String title, {int maxLength = 30}) {
+  final Characters chars = title.characters;
+  return chars.length <= maxLength ? title : '${chars.take(maxLength)}…';
+}
 
 /// Modale de sélection rapide, réutilisée partout où un morceau peut être
 /// ajouté à une playlist sans naviguer vers un écran secondaire (Player,
@@ -46,12 +56,36 @@ class AddToPlaylistSheet extends ConsumerWidget {
                   leading: CircleAvatar(backgroundColor: playlist.vibeStyle.accentColor, radius: 10),
                   title: Text(playlist.title),
                   onTap: () async {
-                    await ref.read(playlistTrackRepositoryProvider).addTrack(playlist.id, trackId);
-                    if (context.mounted) {
-                      Navigator.of(context).pop();
-                      ScaffoldMessenger.of(context)
-                          .showSnackBar(SnackBar(content: Text('Ajouté à "${playlist.title}"')));
-                    }
+                    // Tout est capturé avant l'await : la feuille est fermée
+                    // ensuite, le snackbar s'affiche sur l'écran en dessous.
+                    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+                    final NavigatorState navigator = Navigator.of(context);
+                    final Color errorColor = Theme.of(context).colorScheme.error;
+                    final PlaylistTrackRepository playlistTracks = ref.read(playlistTrackRepositoryProvider);
+                    final TrackRepository tracks = ref.read(trackRepositoryProvider);
+
+                    final AddTrackResult result = await playlistTracks.addTrack(playlist.id, trackId);
+                    final String title = (await tracks.findById(trackId))?.title ?? '';
+                    navigator.pop();
+
+                    final SnackBar snackBar = switch (result) {
+                      AddTrackResult.added => SnackBar(
+                          content: Text('"${truncateTitle(title)}" a été ajouté à la playlist "${playlist.title}"'),
+                          action: SnackBarAction(
+                            label: 'Annuler',
+                            onPressed: () => playlistTracks.removeTrack(playlist.id, trackId),
+                          ),
+                        ),
+                      AddTrackResult.alreadyPresent => SnackBar(
+                          content: const Text('Ce titre est déjà présent dans la playlist'),
+                          backgroundColor: errorColor,
+                        ),
+                      AddTrackResult.notInLibrary => SnackBar(
+                          content: const Text("Ce titre n'est plus dans la bibliothèque."),
+                          backgroundColor: errorColor,
+                        ),
+                    };
+                    messenger.showSnackBar(snackBar);
                   },
                 ),
               ),
