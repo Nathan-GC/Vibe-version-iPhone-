@@ -3,8 +3,10 @@ import 'dart:io';
 import 'package:ffmpeg_kit_flutter_new_min/ffprobe_kit.dart';
 import 'package:ffmpeg_kit_flutter_new_min/media_information.dart';
 import 'package:ffmpeg_kit_flutter_new_min/media_information_session.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../shared/text/title_cleaner.dart';
+import '../protected_artist_names.dart';
 import 'artist_name_normalizer.dart';
 import 'raw_track_metadata.dart';
 
@@ -15,10 +17,26 @@ import 'raw_track_metadata.dart';
 /// Un tag Artist combiné ("Daft Punk feat. Justice") est éclaté en artists[],
 /// jamais conservé aplati (voir core/identity/track_key.dart).
 class MetadataExtractor {
-  // \b avant feat/ft/x : sans frontière de mot, "ft" matchait aussi à
+  // \b avant feat/ft : sans frontière de mot, "ft" matchait aussi à
   // l'intérieur de "Daft" et coupait "Daft Punk" en ["Da", "Punk"] même sans
   // featuring — bug réel découvert en testant avec de vrais morceaux Daft Punk.
-  static final RegExp _artistSplitPattern = RegExp(r'\s*(\bfeat\.?|\bft\.?|,|&|\bx\b)\s*', caseSensitive: false);
+  // Frontière aussi APRÈS (`(?:\.|\b)`, même technique que le parseur de noms
+  // de fichiers) : sans elle "Feather Wilson" était coupé sur "feat". Le "x"
+  // exige des espaces des deux côtés pour ne pas couper "X Ambassadors".
+  static final RegExp _artistSplitPattern = RegExp(
+    r'\s*(\bfeat(?:\.|\b)|\bft(?:\.|\b)|,|&|\s+x\s+)\s*',
+    caseSensitive: false,
+  );
+
+  /// Éclate un tag Artist combiné en artistes distincts, en protégeant d'abord
+  /// les noms connus contenant un séparateur ("Tyler, The Creator").
+  @visibleForTesting
+  static List<String> splitArtistTag(String rawArtist) {
+    final protection = ProtectedArtistNames.protect(rawArtist);
+    return ArtistNameNormalizer.splitAndNormalize(protection.text, _artistSplitPattern)
+        .map(protection.restore)
+        .toList();
+  }
 
   Future<RawTrackMetadata> extract(File file) async {
     final MediaInformationSession session = await FFprobeKit.getMediaInformation(file.path);
@@ -29,8 +47,7 @@ class MetadataExtractor {
     String? tag(String key) => (tags[key] ?? tags[key.toUpperCase()]) as String?;
 
     final String? rawArtist = tag('artist');
-    final List<String> artists =
-        rawArtist == null ? const [] : ArtistNameNormalizer.splitAndNormalize(rawArtist, _artistSplitPattern);
+    final List<String> artists = rawArtist == null ? const [] : splitArtistTag(rawArtist);
 
     final double? durationSeconds = double.tryParse(info.getDuration() ?? '');
     // TBPM (ID3v2) : ffprobe l'expose tel quel, parfois en décimal

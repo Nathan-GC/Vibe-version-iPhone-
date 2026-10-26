@@ -59,7 +59,14 @@ class MetadataApiClient {
   // Volontairement prudent (3s, ~20 req/min) plutôt que rapide : la vitesse
   // n'est pas la priorité, éviter le blocage en cascade l'est.
   static const Duration _minIntervalBetweenRequests = Duration(seconds: 3);
-  DateTime? _lastRequestAt;
+
+  // Rafale tolérée : la recherche d'enrichissement interroge les catalogues
+  // US et FR EN MÊME TEMPS (TrackAutoEnricher) — au plus [_burst] requêtes par
+  // fenêtre de `_burst × 3 s`, soit le même débit moyen (~20 req/min).
+  static const int _burst = 2;
+
+  /// Créneaux d'envoi des [_burst] dernières requêtes réservées.
+  final List<DateTime> _recentSlots = [];
 
   /// `cancelToken` : annule la requête HTTP précédente encore en vol quand
   /// l'utilisateur retape avant qu'elle n'ait répondu (autocomplétion —
@@ -71,17 +78,25 @@ class MetadataApiClient {
   /// exactement une requête par morceau — sans quoi un blocage de débit
   /// iTunes en tout début de scan geler l'écran d'onboarding le temps des
   /// reprises internes ci-dessous (jusqu'à plusieurs minutes chacune).
+  ///
+  /// `country` (code de store à deux lettres, ex. `US`/`FR`) : envoyé tel quel
+  /// en paramètre `country` quand il est renseigné. iTunes interroge par
+  /// défaut le catalogue `US` ; un morceau absent de ce store (ou présent
+  /// avec une pochette/métadonnée différente) peut exister dans un autre,
+  /// d'où la possibilité d'en choisir un (voir `TrackAutoEnricher`). `null` :
+  /// paramètre omis, comportement inchangé pour les autres appelants.
   Future<List<OnlineTrackResult>> search(
     String query, {
     int limit = 15,
     CancelToken? cancelToken,
     bool retryOnFailure = true,
+    String? country,
   }) async {
     if (query.trim().isEmpty) return const [];
 
     final Response<String> response = await _getWithRetry(
       'https://itunes.apple.com/search',
-      queryParameters: {'term': query, 'entity': 'song', 'limit': limit},
+      queryParameters: {'term': query, 'entity': 'song', 'limit': limit, if (country != null) 'country': country},
       cancelToken: cancelToken,
       retryOnFailure: retryOnFailure,
     );
@@ -242,15 +257,22 @@ class MetadataApiClient {
     }
   }
 
-  /// Impose [_minIntervalBetweenRequests] entre deux requêtes, en attendant
-  /// ici plutôt qu'en comptant sur chaque appelant pour espacer ses appels.
+  /// Débit moyen d'une requête toutes les [_minIntervalBetweenRequests], tous
+  /// appelants confondus, avec des rafales de [_burst] (catalogues US + FR
+  /// simultanés). Le créneau est RÉSERVÉ avant toute attente : deux appels
+  /// concurrents lisaient auparavant le même horodatage et partaient
+  /// ensemble, doublant le débit réel et le risque de blocage 403.
   Future<void> _throttle() async {
-    final DateTime? last = _lastRequestAt;
-    if (last != null) {
-      final Duration remaining = _minIntervalBetweenRequests - DateTime.now().difference(last);
-      if (remaining > Duration.zero) await Future.delayed(remaining);
+    final DateTime now = DateTime.now();
+    DateTime slot = now;
+    if (_recentSlots.length >= _burst) {
+      final DateTime windowEnd = _recentSlots[_recentSlots.length - _burst].add(_minIntervalBetweenRequests * _burst);
+      if (windowEnd.isAfter(slot)) slot = windowEnd;
     }
-    _lastRequestAt = DateTime.now();
+    _recentSlots.add(slot);
+    if (_recentSlots.length > _burst) _recentSlots.removeAt(0);
+    final Duration wait = slot.difference(now);
+    if (wait > Duration.zero) await Future.delayed(wait);
   }
 
   /// iTunes signale son blocage de débit par un 403 (pas le 429 standard,
@@ -305,6 +327,7 @@ class MetadataApiClient {
     final String? artworkUrl100 = json['artworkUrl100'] as String?;
 
     return OnlineTrackResult(
+      trackId: json['trackId'] as int?,
       title: TitleCleaner.clean(json['trackName'] as String? ?? ''),
       artist: json['artistName'] as String? ?? '',
       album: json['collectionName'] as String?,
@@ -316,6 +339,7 @@ class MetadataApiClient {
       trackNumber: json['trackNumber'] as int?,
       discNumber: json['discNumber'] as int?,
       trackCount: json['trackCount'] as int?,
+      durationMs: (json['trackTimeMillis'] as num?)?.toInt(),
     );
   }
 }

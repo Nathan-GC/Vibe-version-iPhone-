@@ -1,4 +1,5 @@
 import '../../shared/text/title_cleaner.dart';
+import '../protected_artist_names.dart';
 
 class SanitizedFilename {
   const SanitizedFilename({
@@ -71,36 +72,30 @@ class FilenameSanitizer {
   // "... Official Audio"). Appliqué en boucle : certains fichiers empilent
   // plusieurs suffixes ("-Lyrics" puis, une fois retiré, plus rien d'autre).
   static final RegExp _bareTrailingNoise = RegExp(
-    r'[\s_-]+(?:official\s+)?(?:lyrics?|paroles?|audio|video|visuali[sz]er|hq)\s*$',
+    // "free download ..." avale tout ce qui suit (lien, "IN DESCRIPTION"...).
+    r'[\s_-]+(?:(?:official\s+)?(?:lyrics?|paroles?|letra|audio|video|visuali[sz]er|hq|tiktok|slowed|sped\s*up)\s*$|'
+    r'free\s*download\b.*$)',
     caseSensitive: false,
   );
+  // Mots de bruit isolés au milieu d'un segment ("Till I Collapse Lyrics by
+  // Eminem") : bornes alphanumériques pour ne jamais couper dans un mot
+  // ("Lyricist", "Tiktoker"). Les groupes entre crochets sont captés pour être
+  // laissés tels quels : "(JENNIE Remix - Official Lyric Video)" est déjà
+  // traité par TitleCleaner et ne doit pas être grignoté ici. "slowed + reverb"
+  // part d'un bloc : sinon "Reverb" restait seul dans le titre.
+  static final RegExp _standaloneNoise = RegExp(
+    r'([\(\[\{][^\(\)\[\]\{\}]*[\)\]\}])|'
+    r'(?<![A-Za-z0-9])(?:lyrics?|tiktok|slowed(?:\s*\+?\s*reverb)?|sped\s*up)(?![A-Za-z0-9])',
+    caseSensitive: false,
+  );
+  // Emoji corrompu par un convertisseur : suite de "?" ; un "?" ou "?!" seul
+  // fait partie d'un vrai titre et reste.
+  static final RegExp _corruptedEmoji = RegExp(r'\?{2,}');
   // Insère un espace aux frontières de mots collés (style "TVGirl",
   // "IWannaBeYours") — fréquent dans les noms compacts sans espaces d'un
   // convertisseur en particulier. Purement additif (n'efface jamais rien),
   // donc sans risque sur les noms déjà correctement espacés.
   static final RegExp _camelCaseBoundary = RegExp(r'(?<=[a-zA-Z0-9])(?=[A-Z][a-z])');
-
-  // Noms d'artistes connus dont la ponctuation/les caractères spéciaux
-  // internes seraient sinon détruits par le nettoyage (points de "Fred
-  // again..") ou pris à tort pour un séparateur multi-artiste (la virgule de
-  // "Earth, Wind & Fire", le "&" de "Florence + The Machine"). Chaque entrée
-  // matche aussi les variantes courantes sur disque (espace/tiret/underscore
-  // à la place du caractère spécial, ponctuation optionnelle) : le "/" de
-  // "AC/DC" ne peut lui-même jamais apparaître dans un nom de fichier.
-  static final List<({String canonical, RegExp pattern})> _protectedArtistNames = [
-    (canonical: 'Fred again..', pattern: RegExp(r'fred\s*again\.{0,2}', caseSensitive: false)),
-    (canonical: 'AC/DC', pattern: RegExp(r'ac[\s_-]?dc', caseSensitive: false)),
-    (canonical: 'Florence + The Machine', pattern: RegExp(r'florence\s*\+\s*the\s*machine', caseSensitive: false)),
-    (canonical: 'Earth, Wind & Fire', pattern: RegExp(r'earth,?\s*wind\s*&\s*fire', caseSensitive: false)),
-    (canonical: 'Panic! At The Disco', pattern: RegExp(r'panic!?\s*at\s*the\s*disco', caseSensitive: false)),
-    (canonical: 'will.i.am', pattern: RegExp(r'will\.?i\.?am', caseSensitive: false)),
-    (canonical: 'M.I.A.', pattern: RegExp(r'\bm\.i\.a\.?\b', caseSensitive: false)),
-    (canonical: "Guns N' Roses", pattern: RegExp(r"guns\s*n'?\s*roses", caseSensitive: false)),
-    (
-      canonical: 'Crosby, Stills, Nash & Young',
-      pattern: RegExp(r'crosby,?\s*stills,?\s*nash\s*&\s*young', caseSensitive: false),
-    ),
-  ];
 
   // Séparateurs entre artistes multiples au sein du segment artiste (jamais
   // appliqué au titre) : virgule, esperluette, "x" isolé, "vs", "feat.",
@@ -124,22 +119,9 @@ class FilenameSanitizer {
     // jamais produit par un vrai nom de fichier) insensible à toutes les
     // regex de nettoyage ci-dessous (aucune ne matche en dehors de
     // [0-9a-zA-Z] et de quelques mots précis), puis restaurés à la toute fin.
-    final List<String> restoreByPlaceholder = [];
-    String protectedInput = withoutExtension;
-    for (final protectedName in _protectedArtistNames) {
-      protectedInput = protectedInput.replaceAllMapped(protectedName.pattern, (match) {
-        final String placeholder = String.fromCharCode(0xE000 + restoreByPlaceholder.length);
-        restoreByPlaceholder.add(protectedName.canonical);
-        return placeholder;
-      });
-    }
-    String restoreProtectedNames(String value) {
-      String result = value;
-      for (int i = 0; i < restoreByPlaceholder.length; i++) {
-        result = result.replaceAll(String.fromCharCode(0xE000 + i), restoreByPlaceholder[i]);
-      }
-      return result;
-    }
+    final protection = ProtectedArtistNames.protect(withoutExtension);
+    final String protectedInput = protection.text;
+    final String Function(String) restoreProtectedNames = protection.restore;
 
     String withoutTrackNumber = protectedInput;
     String previous;
@@ -157,7 +139,7 @@ class FilenameSanitizer {
       withoutIdNoise = withoutIdNoise.replaceFirst(_emptyBracketPair, ' ');
     } while (withoutIdNoise != previous);
 
-    final String withoutNoise = withoutIdNoise.replaceAll(TitleCleaner.noiseTags, '');
+    final String withoutNoise = TitleCleaner.stripNoiseTags(withoutIdNoise);
 
     // Espacement des mots collés fait tôt, *avant* le dépiècement de l'ID et
     // du bruit terminal nu : sans ça, un suffixe comme "EnglishLyrics" ne
@@ -179,7 +161,7 @@ class FilenameSanitizer {
 
     final String normalized = withoutBareNoise.replaceAll('_', ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
 
-    final List<String> parts = _splitOnTopLevelSeparator(normalized);
+    final List<String> parts = _splitOnTopLevelSeparator(normalized).map(_denoiseSegment).toList();
 
     if (parts.length == 2) {
       // Un second segment qui ne fait que répéter (une partie de) l'artiste
@@ -218,7 +200,20 @@ class FilenameSanitizer {
     }
 
     // Aucun séparateur trouvé : impossible de distinguer artiste/titre.
-    return SanitizedFilename(artist: 'Unknown', title: restoreProtectedNames(normalized), requiresUserReview: true);
+    return SanitizedFilename(
+        artist: 'Unknown', title: restoreProtectedNames(_denoiseSegment(normalized)), requiresUserReview: true);
+  }
+
+  /// Retire les "??" et les mots de bruit isolés d'un segment. Si le nettoyage
+  /// viderait le segment, on garde la valeur d'origine : mieux vaut un titre
+  /// moche qu'un titre/artiste vide.
+  static String _denoiseSegment(String segment) {
+    final String cleaned = segment
+        .replaceAll(_corruptedEmoji, ' ')
+        .replaceAllMapped(_standaloneNoise, (m) => m.group(1) ?? ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    return cleaned.isEmpty ? segment : cleaned;
   }
 
   /// Sépare un segment "artiste" en artiste principal + featurings sur les

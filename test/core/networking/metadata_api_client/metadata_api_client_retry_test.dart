@@ -130,4 +130,33 @@ void main() {
     await expectLater(client.search('some query', retryOnFailure: false), throwsA(isA<DioException>()));
     expect(adapter.callCount, 1); // pas d'attente de plusieurs minutes sur le blocage 403.
   });
+
+  test('two simultaneous requests leave together, the next pair waits: average rate unchanged', () async {
+    final adapter = _TimedAdapter();
+    final client = MetadataApiClient(dio: Dio()..httpClientAdapter = adapter);
+    final Stopwatch clock = Stopwatch()..start();
+
+    // Paire US + FR (TrackAutoEnricher) puis une troisième requête aussitôt.
+    await Future.wait([client.search('a', country: 'US'), client.search('a', country: 'FR'), client.search('b')]);
+
+    final List<Duration> sent = [for (final DateTime t in adapter.sentAt) t.difference(adapter.sentAt.first)];
+    expect(sent[1], lessThan(const Duration(seconds: 1)), reason: 'la paire part ensemble');
+    expect(sent[2], greaterThanOrEqualTo(const Duration(milliseconds: 5900)), reason: '2 requêtes par 6 s au plus');
+    expect(clock.elapsed, lessThan(const Duration(seconds: 10)));
+  });
+}
+
+/// Adaptateur qui note l'instant d'envoi de chaque requête.
+class _TimedAdapter implements HttpClientAdapter {
+  final List<DateTime> sentAt = [];
+
+  @override
+  Future<ResponseBody> fetch(
+      RequestOptions options, Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async {
+    sentAt.add(DateTime.now());
+    return ResponseBody.fromString('{"results":[]}', 200);
+  }
+
+  @override
+  void close({bool force = false}) {}
 }

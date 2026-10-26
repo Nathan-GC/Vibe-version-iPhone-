@@ -22,7 +22,7 @@ import 'package:playlist_app/features/playlists/data/playlist_track_repository.d
 class _OfflineMetadataApiClient extends MetadataApiClient {
   @override
   Future<List<OnlineTrackResult>> search(String query,
-          {int limit = 15, CancelToken? cancelToken, bool retryOnFailure = true}) async =>
+          {int limit = 15, CancelToken? cancelToken, bool retryOnFailure = true, String? country}) async =>
       const [];
 }
 

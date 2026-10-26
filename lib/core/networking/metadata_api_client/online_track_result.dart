@@ -12,6 +12,8 @@ class OnlineTrackResult {
     this.trackNumber,
     this.discNumber,
     this.trackCount,
+    this.trackId,
+    this.durationMs,
   });
 
   final String title;
@@ -31,4 +33,12 @@ class OnlineTrackResult {
   final int? trackNumber;
   final int? discNumber;
   final int? trackCount;
+  // `trackId` iTunes — identifiant stable d'un morceau dans le catalogue,
+  // identique d'un store (US/FR) à l'autre quand c'est le même enregistrement :
+  // sert à dédoublonner des résultats fusionnés (voir TrackAutoEnricher).
+  final int? trackId;
+  // `trackTimeMillis` iTunes — durée de l'enregistrement, comparée à celle du
+  // fichier local par TrackMatchConfidence pour écarter une version différente
+  // (extended, radio edit...) que le titre seul ne distingue pas.
+  final int? durationMs;
 }

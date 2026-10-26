@@ -219,8 +219,175 @@ void main() {
     });
 
     test('flags multiple top-level separators as ambiguous rather than guessing', () {
-      final r = sanitizer.sanitizeFilename('Beyoncé ft. Jay-Z - Crazy in love.mp3');
+      final r = sanitizer.sanitizeFilename('Artist - Album - Song.mp3');
       expect(r.requiresUserReview, isTrue);
+    });
+  });
+
+  group('protected names with separators or hyphens (real library files)', () {
+    ({String artist, List<String> feat, String title}) parse(String name) {
+      final r = sanitizer.sanitizeFilename(name);
+      return (artist: r.artist, feat: r.featuringArtists, title: r.title);
+    }
+
+    test('"Tyler, The Creator" stays a single artist', () {
+      final r = parse('Tyler, The Creator - Sugar On My Tongue (Lyrics)_1759923948611.mp3');
+      expect(r.artist, 'Tyler, The Creator');
+      expect(r.feat, isEmpty);
+      expect(r.title, 'Sugar On My Tongue');
+    });
+
+    test('"by Tyler, The Creator" suffix is not split into two artists', () {
+      final r = parse('GONE, GONE  THANK YOU by Tyler, The Creator lyrics_1750283457001.mp3');
+      expect(r.feat, isEmpty);
+      expect(r.title, contains('Tyler, The Creator'));
+    });
+
+    test('"Jay-Z" hyphen is not taken for the artist/title separator', () {
+      final r = parse('Beyoncé ft. Jay-Z - Crazy in love [Lyrics]_1748454868166.mp3');
+      expect(r.artist, 'Beyoncé');
+      expect(r.feat, ['Jay-Z']);
+      expect(r.title, 'Crazy in love');
+    });
+
+    test('"JAY-Z" at the end keeps its hyphen', () {
+      final r = parse('Nias In Paris (Lyrics) JAY-Z_1716328040086.mp3');
+      expect(r.artist, 'Unknown');
+      expect(r.title, contains('Jay-Z'));
+    });
+
+    test('"Ne-Yo" is kept whole among several featurings', () {
+      final r = parse('Pitbull - Give Me Everything (Lyrics) Ft. Ne-Yo, Afrojack, Nayer_1717096919460.mp3');
+      expect(r.artist, 'Pitbull');
+      expect(r.title, contains('Ne-Yo'));
+    });
+
+    test('"Selena Gomez & The Scene" stays ONE artist', () {
+      final r = parse('Selena Gomez & The Scene - Love You Like A Love Song (Lyrics).m4a');
+      expect(r.artist, 'Selena Gomez & The Scene');
+      expect(r.feat, isEmpty);
+      expect(r.title, 'Love You Like A Love Song');
+    });
+
+    test('compact "TheMamas&ThePapas" is recognised and spaced', () {
+      final r = parse("TheMamas&ThePapas-CaliforniaDreamin'_401.m4a");
+      expect(r.artist, 'The Mamas & The Papas');
+      expect(r.feat, isEmpty);
+      expect(r.title, "California Dreamin'");
+    });
+
+    test('"Hunter X Hunter" is never split into two "Hunter"', () {
+      final r = parse('Hunter X Hunter - Opening 1 _ Departure!_1670707661361.mp3');
+      expect(r.artist, 'Hunter x Hunter');
+      expect(r.feat, isEmpty);
+      expect(r.title, 'Opening 1 Departure!');
+    });
+
+    test('compact "HunterxHunter" and the "×" sign are protected too', () {
+      final compact = parse('HunterxHunter2011OST-RestrictionandPledge[extended]_346.m4a');
+      expect(compact.feat, isEmpty);
+      expect(compact.artist, startsWith('Hunter x Hunter'));
+      final sign = parse('Hunter×Hunter(2011)-PhantomTroupeSoundtracks_934.m4a');
+      expect(sign.feat, isEmpty);
+      expect(sign.artist, startsWith('Hunter x Hunter'));
+    });
+
+    test('"Earth, Wind & Fire" keeps working', () {
+      final r = parse('Earth, Wind & Fire - Boogie Wonderland (Lyrics)_1749836887015.mp3');
+      expect(r.artist, 'Earth, Wind & Fire');
+      expect(r.feat, isEmpty);
+      expect(r.title, 'Boogie Wonderland');
+    });
+
+    test('no protected pattern fires inside "Daft Punk" or "ThePixies"', () {
+      final daft = parse('Daft Punk - One More Time (Official Video)_1725636997429.mp3');
+      expect(daft.artist, 'Daft Punk');
+      expect(daft.feat, isEmpty);
+      expect(daft.title, 'One More Time');
+      final pixies = parse('ThePixies-Whereismymind{lyrics}_976.m4a');
+      expect(pixies.artist, 'The Pixies');
+      expect(pixies.feat, isEmpty);
+    });
+
+    test('"Kool & The Gang", "Years & Years" and "Mumford & Sons" are single artists', () {
+      for (final name in ['Kool & The Gang', 'Years & Years', 'Mumford & Sons']) {
+        final r = parse('$name - Some Song.mp3');
+        expect(r.artist, name);
+        expect(r.feat, isEmpty);
+      }
+    });
+  });
+
+  group('noise words (directed by, letra, lyrics, tiktok, slowed, sped up, free download, ??)', () {
+    String title(String f) => sanitizer.sanitizeFilename(f).title;
+
+    test('removes the "Directed by" credit bracket', () {
+      final r = sanitizer.sanitizeFilename('Eminem - Godzilla ft. Juice WRLD (Directed by Cole Bennett).m4a');
+      expect(r.artist, 'Eminem');
+      expect(r.title, 'Godzilla ft. Juice WRLD');
+      expect(title('Juice WRLD - Lucid Dreams (Directed by Cole Bennett).m4a'), 'Lucid Dreams');
+    });
+
+    test('removes corrupted emojis ("??") and trailing ids', () {
+      expect(title('Alejandro - Lady Gaga (Lyrics) ??_1744731232522.mp3'), 'Lady Gaga');
+      expect(title('CallMeMaybe-CarlyRaeJepsen(Lyrics)??_218.m4a'), 'Carly Rae Jepsen');
+    });
+
+    test('keeps a single "?" or "?!" and never returns an empty title', () {
+      expect(title('Syko - BrooklynBloodPop?! (Lyrics)_1717176542219.mp3'), contains('?!'));
+      final r = sanitizer.sanitizeFilename('MIA BOYKA - ???????? (Official Audio)_1780734355759.mp3');
+      expect(r.title, isNotEmpty);
+    });
+
+    test('removes TikTok / Lyrics / Letra in and out of brackets', () {
+      expect(title('Creeds - Push Up (Lyrics)  Tiktok_1761643521373.mp3'), 'Push Up');
+      final kim = title(
+        "Kim - Confidence (Lyrics) _Je le sens c'est lui l'homme de ma vie_ [Tiktok Song]_1780134074139.mp3",
+      );
+      expect(kim.toLowerCase(), isNot(contains('tiktok')));
+      expect(title('Yo Voy - Zion Y Lennox Ft Daddy Letra (Lyrics)_1741300714498.mp3').toLowerCase(),
+          isNot(contains('letra')));
+      expect(
+        title('David Guetta   Memories (Lyrics) (tiktok) ft. Kid Cudi--5d77f56839a0bb9fa2743892f8241dd5.mp3')
+            .toLowerCase(),
+        isNot(contains('tiktok')),
+      );
+      expect(title('Till I Collapse Lyrics by Eminem.m4a'), isNot(contains('Lyrics')));
+      expect(title('ROSALÍA - DESPECHA (LetraLyrics)_1746905542269.mp3'), 'DESPECHA');
+    });
+
+    test('mixed brackets keep the version marker and drop only the noise', () {
+      expect(title('Cool for the Summer (hardstyle remix + SLOWED)_1771860545993.mp3'), contains('(hardstyle remix)'));
+      expect(title('Cool for the Summer (hardstyle remix + SLOWED)_1771860545993.mp3'), isNot(contains('SLOWED')));
+      expect(title('JVSTIN - CLANDESTINA (TikTok Remix)_1670150722766.mp3'), 'CLANDESTINA (Remix)');
+      expect(title('AaronSmith-Dancin(KRONORemix)-Lyrics_111.m4a'), contains('(KRONO Remix)'));
+      expect(title('AaronSmith-Dancin(KRONORemix)-Lyrics_111.m4a'), isNot(contains('Lyrics')));
+    });
+
+    test('removes sped up / slowed / visualizer / remastered / free download', () {
+      final sped = title('KillEva&ENCASSATOR-PsychoDreams(SpedUp)EnglishLyrics_361.m4a');
+      expect(sped, isNot(contains('Sped')));
+      expect(sped, isNot(contains('Lyrics')));
+      expect(title('SUICIDAL-IDOL-ecstacy(slowed)_827.m4a').toLowerCase(), isNot(contains('slowed')));
+      // "slowed + reverb" retiré d'un bloc, sans laisser "Reverb" seul.
+      final String mareux = title('Mareux - The Perfect Girl (Retrowave_Synthwave cover) Slowed Reverb - '
+          'SEAMLESS 16 MINUTE LOOP.m4a');
+      expect(mareux, isNot(contains('Slowed')));
+      expect(mareux, isNot(contains('Reverb')));
+      expect(mareux, contains('cover'), reason: 'marqueur de version conservé');
+      expect(title('ascendant vierge - Lotus Noir (Visualizer)_1752779624730.mp3'), 'Lotus Noir');
+      expect(title('Abba - Dancing Queen (Official Music Video Remastered)_1717097183324.mp3'), 'Dancing Queen');
+      final roi = sanitizer.sanitizeFilename(
+        'VIDEOCLUB - ROI  INSTRUMENTAL ( + paroles  letra) FREE DOWNLOAD IN DESCRIPTION_1717703931030.mp3',
+      );
+      expect(roi.artist, 'VIDEOCLUB');
+      expect(roi.title, 'ROI INSTRUMENTAL');
+    });
+
+    test('regression guards: real numeric titles and word boundaries survive', () {
+      expect(title('ArcticMonkeys-505(Lyrics)_733.m4a'), '505');
+      expect(title('Vivaldi-Summer,RV315_837.m4a'), 'Summer,RV315');
+      expect(title('Some Artist - Lyricist Tiktoker.mp3'), 'Lyricist Tiktoker');
     });
   });
 }

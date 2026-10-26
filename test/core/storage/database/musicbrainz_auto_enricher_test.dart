@@ -35,6 +35,7 @@ class _FakeItunes extends MetadataApiClient {
     int limit = 15,
     CancelToken? cancelToken,
     bool retryOnFailure = true,
+    String? country,
   }) async {
     callCount++;
     return results;
