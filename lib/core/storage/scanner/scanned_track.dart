@@ -16,6 +16,7 @@ class ScannedTrack {
     this.bpm,
     this.lastModifiedEpochMs = 0,
     this.fileHash,
+    this.coverArtPath,
   });
 
   final String id;
@@ -44,4 +45,8 @@ class ScannedTrack {
   // relire leurs tags ni relancer le découpage de silence.
   final int lastModifiedEpochMs;
   final String? fileHash;
+  // Pochette intégrée au fichier, déjà extraite dans `track_covers/` — `null`
+  // sans pochette intégrée ou si l'extraction a échoué. TrackRepository ne
+  // l'applique que si le titre n'a pas encore de pochette (sinon supprimée).
+  final String? coverArtPath;
 }

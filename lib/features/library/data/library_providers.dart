@@ -51,7 +51,14 @@ final Provider<MusicBrainzAutoEnricher> musicBrainzAutoEnricherProvider = Provid
 /// Morceaux déjà en base, les plus récents en premier.
 final StreamProvider<List<Track>> libraryTracksProvider = StreamProvider<List<Track>>((ref) {
   final AppDatabase db = ref.watch(appDatabaseProvider);
-  return (db.select(db.tracks)..orderBy([(t) => OrderingTerm.desc(t.createdAt)])).watch();
+  return (db.select(db.tracks)
+        ..orderBy([
+          (t) => OrderingTerm.desc(t.createdAt),
+          // Départage stable à `created_at` égal (scan en masse).
+          (t) => OrderingTerm.asc(t.title),
+          (t) => OrderingTerm.asc(t.id),
+        ]))
+      .watch();
 });
 
 /// Cible des passes automatiques d'"Enrichir tout" : catégorie "À enrichir"

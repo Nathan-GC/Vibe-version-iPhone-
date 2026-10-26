@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/audio_engine/player_controller.dart';
 import '../../../core/navigation/active_tab_provider.dart';
 import '../../../core/shared/widgets/add_to_playlist_sheet.dart';
+import '../../../core/shared/widgets/local_cover_image.dart';
 import '../../../core/shared/widgets/online_track_card.dart';
 import '../../../core/shared/widgets/playlist_card.dart';
 import '../../../core/shared/widgets/skeleton_loader.dart';
@@ -403,7 +403,8 @@ class _TopArtistPlaylistCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final String? coverPath = playlist.coverArtPath;
+    // Artiste de la bibliothèque locale : jamais de pochette via le réseau.
+    final ImageProvider? coverImage = playlist.coverArtPath == null ? null : localCoverImage(playlist.coverArtPath!);
     return SizedBox(
       width: 152,
       child: InkWell(
@@ -417,15 +418,13 @@ class _TopArtistPlaylistCard extends ConsumerWidget {
               aspectRatio: 1,
               child: ClipRRect(
                 borderRadius: const BorderRadius.all(Radius.circular(AppRadii.card)),
-                child: coverPath == null
+                child: coverImage == null
                     ? Container(
                         color: Theme.of(context).colorScheme.surfaceContainerHighest,
                         child: const Icon(Icons.person_outline, size: 40),
                       )
                     : Image(
-                        image: coverPath.startsWith('http')
-                            ? NetworkImage(coverPath)
-                            : FileImage(File(coverPath)) as ImageProvider,
+                        image: coverImage,
                         fit: BoxFit.cover,
                         errorBuilder: (context, error, stackTrace) => Container(
                           color: Theme.of(context).colorScheme.surfaceContainerHighest,

@@ -91,8 +91,9 @@ class SettingsScreen extends ConsumerWidget {
             secondary: const Icon(Icons.cloud_sync_outlined),
             title: const Text('Enrichissement automatique à l\'importation'),
             subtitle: const Text(
-              'Après un import, recherche pochette et infos sur iTunes puis MusicBrainz. '
-              'Désactivé : l\'import reste 100 % hors-ligne.',
+              'Après un import, recherche pochette et infos sur iTunes puis MusicBrainz ; '
+              'les pochettes trouvées sont enregistrées sur l\'appareil. '
+              'Désactivé : aucune connexion automatique, import et affichage 100 % hors-ligne.',
             ),
             value: ref.watch(autoEnrichOnImportProvider),
             onChanged: (value) => ref.read(autoEnrichOnImportProvider.notifier).set(value),

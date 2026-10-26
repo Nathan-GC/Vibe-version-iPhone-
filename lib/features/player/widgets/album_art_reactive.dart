@@ -1,6 +1,6 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
+
+import '../../../core/shared/widgets/local_cover_image.dart';
 
 /// Cover art : s'agrandit avec drop-shadow au Play, rétrécit de 5% au Pause.
 /// `imagePath` est double-usage (voir Tracks.coverArtPath) : chemin fichier
@@ -41,13 +41,8 @@ class _AlbumArtReactiveState extends State<AlbumArtReactive> {
     if (path == _cachedPath && decodeWidth == _cachedWidth) return _cachedImage;
     _cachedPath = path;
     _cachedWidth = decodeWidth;
-    _cachedImage = (path == null || path.isEmpty)
-        ? null
-        : ResizeImage.resizeIfNeeded(
-            decodeWidth,
-            null,
-            (path.startsWith('http') ? NetworkImage(path) : FileImage(File(path))) as ImageProvider,
-          );
+    final ImageProvider? local = path == null ? null : localCoverImage(path);
+    _cachedImage = local == null ? null : ResizeImage.resizeIfNeeded(decodeWidth, null, local);
     return _cachedImage;
   }
 

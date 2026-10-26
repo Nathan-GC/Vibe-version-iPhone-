@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import '../../identity/track_key.dart';
 import '../../shared/constants/app_constants.dart';
 import '../filename_sanitizer/filename_sanitizer.dart';
+import '../metadata_extractor/embedded_cover_extractor.dart';
 import '../metadata_extractor/metadata_extractor.dart';
 import '../metadata_extractor/raw_track_metadata.dart';
 import '../silence_trimmer/silence_trimmer.dart';
@@ -21,13 +22,16 @@ class LibraryScanService {
     MetadataExtractor? metadataExtractor,
     FilenameSanitizer? filenameSanitizer,
     SilenceTrimmerService? silenceTrimmer,
+    EmbeddedCoverExtractor? coverExtractor,
   })  : _metadataExtractor = metadataExtractor ?? MetadataExtractor(),
         _filenameSanitizer = filenameSanitizer ?? FilenameSanitizer(),
-        _silenceTrimmer = silenceTrimmer ?? SilenceTrimmerService();
+        _silenceTrimmer = silenceTrimmer ?? SilenceTrimmerService(),
+        _coverExtractor = coverExtractor ?? EmbeddedCoverExtractor();
 
   final MetadataExtractor _metadataExtractor;
   final FilenameSanitizer _filenameSanitizer;
   final SilenceTrimmerService _silenceTrimmer;
+  final EmbeddedCoverExtractor _coverExtractor;
 
   /// Traite un fichier déjà connu (hors scan de dossier) — le repli sans-ID3
   /// reparse son propre nom de fichier sur disque. [skipKey] : écarte le
@@ -40,7 +44,12 @@ class LibraryScanService {
   /// découpage des silences : de quoi reconnaître un titre en liste noire
   /// avant tout import ou masquer un fichier choisi. `null` si trop court.
   Future<ScannedTrack?> identify(File file) {
-    return _process(file, () => _filenameSanitizer.sanitizeFilename(p.basename(file.path)), detectSilence: false);
+    return _process(
+      file,
+      () => _filenameSanitizer.sanitizeFilename(p.basename(file.path)),
+      detectSilence: false,
+      extractCover: false,
+    );
   }
 
   /// Traite un fichier tout juste importé via StorageManagerService (Étape 6 —
@@ -56,6 +65,7 @@ class LibraryScanService {
     File file,
     SanitizedFilename Function() fallbackSanitize, {
     bool detectSilence = true,
+    bool extractCover = true,
     Future<bool> Function(String trackKey)? skipKey,
   }) async {
     final RawTrackMetadata metadata = await _metadataExtractor.extract(file);
@@ -91,6 +101,12 @@ class LibraryScanService {
         ? await _silenceTrimmer.detect(file.path, durationMs: durationMs)
         : const TrimResult(trimStartMs: 0, trimEndMs: 0);
 
+    // Après le contrôle de `skipKey` : un fichier écarté ne laisse aucune image
+    // sur disque. `identify` ne fait que reconnaître le fichier, il n'écrit rien.
+    final String? codec = metadata.embeddedCoverCodec;
+    final String? coverArtPath =
+        extractCover && codec != null ? await _coverExtractor.extract(file, trackId: id, codec: codec) : null;
+
     return ScannedTrack(
       id: id,
       title: title,
@@ -105,6 +121,7 @@ class LibraryScanService {
       wasRenamedFromFilename: wasRenamedFromFilename,
       trimStartMs: trim.trimStartMs,
       trimEndMs: trim.trimEndMs,
+      coverArtPath: coverArtPath,
     );
   }
 }

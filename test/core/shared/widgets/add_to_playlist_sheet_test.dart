@@ -63,6 +63,11 @@ void main() {
     await settle(tester);
   }
 
+  Future<void> openSheetAgain(WidgetTester tester) async {
+    await tester.tap(find.text('open'));
+    await settle(tester);
+  }
+
   Future<void> dispose(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox());
     await tester.pump(Duration.zero);
@@ -96,6 +101,22 @@ void main() {
     final List<PlaylistTrack> after = await rows(tester);
     expect(after.length, 1);
     expect(after.single.position, 5);
+
+    await dispose(tester);
+  });
+
+  testWidgets('add then duplicate: the red alert replaces the confirmation', (tester) async {
+    await openSheet(tester);
+    await tester.tap(find.text('Mix'));
+    await settle(tester);
+    expect(find.text('Annuler'), findsOneWidget);
+
+    await openSheetAgain(tester);
+    await tester.tap(find.text('Mix'));
+    await settle(tester);
+
+    expect(find.text('Ce titre est déjà présent dans la playlist'), findsOneWidget);
+    expect(find.text('Annuler'), findsNothing);
 
     await dispose(tester);
   });

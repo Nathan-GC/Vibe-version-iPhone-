@@ -38,6 +38,23 @@ class MetadataExtractor {
         .toList();
   }
 
+  /// Codec de la pochette intégrée, d'après les propriétés ffprobe de chaque
+  /// flux : une pochette est un flux vidéo dont la disposition `attached_pic`
+  /// vaut 1 (ID3 APIC en MP3, `covr` en M4A, PICTURE en FLAC). Un vrai flux
+  /// vidéo (clip) n'est pas marqué ainsi et reste ignoré. `null` sans pochette.
+  @visibleForTesting
+  static String? embeddedCoverCodecOf(Iterable<Map<dynamic, dynamic>?> streams) {
+    for (final stream in streams) {
+      if (stream == null || stream['codec_type'] != 'video') continue;
+      final Object? disposition = stream['disposition'];
+      final Object? attachedPic = disposition is Map ? disposition['attached_pic'] : null;
+      if (attachedPic.toString() != '1') continue;
+      final Object? codec = stream['codec_name'];
+      return codec is String && codec.isNotEmpty ? codec : 'mjpeg';
+    }
+    return null;
+  }
+
   Future<RawTrackMetadata> extract(File file) async {
     final MediaInformationSession session = await FFprobeKit.getMediaInformation(file.path);
     final MediaInformation? info = session.getMediaInformation();
@@ -65,6 +82,7 @@ class MetadataExtractor {
       genre: tag('genre'),
       durationMs: durationSeconds == null ? null : (durationSeconds * 1000).round(),
       bpm: rawBpm?.round(),
+      embeddedCoverCodec: embeddedCoverCodecOf(info.getStreams().map((s) => s.getAllProperties())),
     );
   }
 }

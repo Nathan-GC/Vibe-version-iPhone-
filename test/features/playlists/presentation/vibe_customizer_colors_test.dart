@@ -101,4 +101,37 @@ void main() {
 
     await teardownTree(tester);
   });
+
+  testWidgets('the preview gradient follows the reorder before saving', (tester) async {
+    await pumpScreen(tester);
+
+    LinearGradient previewGradient() {
+      final Iterable<Container> boxes = tester.widgetList<Container>(find.byType(Container));
+      return boxes
+          .map((c) => c.decoration)
+          .whereType<BoxDecoration>()
+          .map((d) => d.gradient)
+          .whereType<LinearGradient>()
+          .firstWhere((g) => g.colors.contains(const Color(0xFF00F0FF)));
+    }
+
+    final List<Color> before = previewGradient().colors;
+    final Finder items = find.bySemanticsLabel(RegExp('Couleur . sur 2'));
+    final Offset first = tester.getCenter(items.at(0));
+    final Offset second = tester.getCenter(items.at(1));
+    final TestGesture gesture = await tester.startGesture(second);
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+    for (int step = 1; step <= 8; step++) {
+      await gesture.moveTo(second + (first - second) * (step / 8) - const Offset(10, 0));
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    final List<Color> after = previewGradient().colors;
+    expect(after, before.reversed.toList());
+    expect(identical(after, before), isFalse);
+
+    await teardownTree(tester);
+  });
 }

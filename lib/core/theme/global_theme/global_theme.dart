@@ -81,7 +81,7 @@ final NotifierProvider<UserAccentColor, Color> userAccentColorProvider =
 /// clairement titres/corps/légendes (charte inspirée de Spotify).
 TextTheme _buildTextTheme(Brightness brightness) {
   final Color baseColor = brightness == Brightness.dark ? Colors.white : Colors.black87;
-  return GoogleFonts.outfitTextTheme().apply(bodyColor: baseColor, displayColor: baseColor).copyWith(
+  final TextTheme theme = GoogleFonts.outfitTextTheme().apply(bodyColor: baseColor, displayColor: baseColor).copyWith(
         headlineSmall: GoogleFonts.outfit(fontSize: 24, fontWeight: FontWeight.w700, color: baseColor),
         titleLarge: GoogleFonts.outfit(fontSize: 20, fontWeight: FontWeight.w700, color: baseColor),
         titleMedium: GoogleFonts.outfit(fontSize: 16, fontWeight: FontWeight.w600, color: baseColor),
@@ -94,7 +94,34 @@ TextTheme _buildTextTheme(Brightness brightness) {
         ),
         labelLarge: GoogleFonts.outfit(fontSize: 14, fontWeight: FontWeight.w600, color: baseColor),
       );
+  // Outfit n'a ni grec ni cyrillique ("Σ" rendu "C") : repli explicite, posé en
+  // dernier pour ne pas être perdu par les styles remplacés ci-dessus.
+  TextStyle? withFallback(TextStyle? style) => style?.copyWith(fontFamilyFallback: _fontFamilyFallback);
+  return TextTheme(
+    displayLarge: withFallback(theme.displayLarge),
+    displayMedium: withFallback(theme.displayMedium),
+    displaySmall: withFallback(theme.displaySmall),
+    headlineLarge: withFallback(theme.headlineLarge),
+    headlineMedium: withFallback(theme.headlineMedium),
+    headlineSmall: withFallback(theme.headlineSmall),
+    titleLarge: withFallback(theme.titleLarge),
+    titleMedium: withFallback(theme.titleMedium),
+    titleSmall: withFallback(theme.titleSmall),
+    bodyLarge: withFallback(theme.bodyLarge),
+    bodyMedium: withFallback(theme.bodyMedium),
+    bodySmall: withFallback(theme.bodySmall),
+    labelLarge: withFallback(theme.labelLarge),
+    labelMedium: withFallback(theme.labelMedium),
+    labelSmall: withFallback(theme.labelSmall),
+  );
 }
+
+/// Noms absents ignorés par le moteur ; iOS retombe sur la police système.
+const List<String> _fontFamilyFallback = ['Roboto', 'Noto Sans', 'sans-serif'];
+
+/// Exposé pour les tests.
+@visibleForTesting
+TextTheme buildTextThemeForTest(Brightness brightness) => _buildTextTheme(brightness);
 
 /// Applique les formes du Design System (cartes/modales à [AppRadii.card],
 /// boutons d'action principale en "Pill" — voir `vibe_design_system.dart`) à

@@ -259,11 +259,16 @@ class _PlaylistSectionState extends ConsumerState<_PlaylistSection> {
                   child: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
                 ),
               ),
-              IconButton(
-                icon: Icon(collapsed ?? false ? Icons.expand_more : Icons.expand_less),
-                tooltip: collapsed ?? false ? 'Déplier la section $title' : 'Replier la section $title',
-                onPressed: collapsed == null ? null : _toggle,
-              ),
+              // État replié pas encore lu : espace de même taille plutôt qu'un
+              // chevron "déplié" trompeur pendant ~0,5 s au démarrage.
+              if (collapsed == null)
+                const SizedBox(width: 48, height: 48)
+              else
+                IconButton(
+                  icon: Icon(collapsed ? Icons.expand_more : Icons.expand_less),
+                  tooltip: collapsed ? 'Déplier la section $title' : 'Replier la section $title',
+                  onPressed: _toggle,
+                ),
             ],
           ),
         ),

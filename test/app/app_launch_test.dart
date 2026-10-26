@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:playlist_app/app/app.dart';
 import 'package:playlist_app/core/purge/local_notification_service.dart';
 import 'package:playlist_app/core/purge/purge_providers.dart';
+import 'package:playlist_app/core/storage/cover_art/remote_cover_auto_trigger.dart';
+import 'package:playlist_app/core/storage/metadata_extractor/embedded_cover_backfill.dart';
 import 'package:playlist_app/core/storage/scanner/documents_library_sync.dart';
 import 'package:playlist_app/core/storage/scanner/full_device_scan_service.dart';
 import 'package:playlist_app/features/library/data/documents_sync_controller.dart';
@@ -28,9 +30,31 @@ class _NoopSync implements DocumentsLibrarySync {
       const DocumentsSyncResult(added: 0, enriched: 0, skippedIncompleteDownloads: 0);
 }
 
+class _FakeCoverTrigger implements RemoteCoverAutoTrigger {
+  int passes = 0;
+
+  @override
+  Future<int> runPass() async => ++passes;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _FakeCoverBackfill implements EmbeddedCoverBackfill {
+  int runs = 0;
+
+  @override
+  Future<void> runOnce() async => runs++;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 void main() {
   late List<String> permissionCalls;
   late _FakeNotifications notifications;
+  late _FakeCoverTrigger coverTrigger;
+  late _FakeCoverBackfill coverBackfill;
 
   setUp(() {
     SharedPreferences.setMockInitialValues({
@@ -39,6 +63,8 @@ void main() {
     });
     permissionCalls = [];
     notifications = _FakeNotifications();
+    coverTrigger = _FakeCoverTrigger();
+    coverBackfill = _FakeCoverBackfill();
   });
 
   Future<void> launch(WidgetTester tester) async {
@@ -54,6 +80,8 @@ void main() {
         localNotificationServiceProvider.overrideWithValue(notifications),
         purgeCheckOnLaunchProvider.overrideWith((ref) async {}),
         documentsLibrarySyncProvider.overrideWithValue(_NoopSync()),
+        remoteCoverAutoTriggerProvider.overrideWithValue(coverTrigger),
+        embeddedCoverBackfillProvider.overrideWithValue(coverBackfill),
       ],
       child: const PlaylistApp(),
     ));
@@ -67,6 +95,10 @@ void main() {
 
     // Tap sur la notification de nettoyage toujours câblé, sans demande.
     expect(notifications.requestedIOSPermission, [false]);
+    // Rapatriement des pochettes en ligne : une passe au démarrage (le localiseur
+    // relit lui-même onboarding terminé + interrupteur, voir son test).
+    expect(coverTrigger.passes, 1);
+    expect(coverBackfill.runs, 1);
     expect(permissionCalls, isNot(contains('requestPermissions')));
   });
 

@@ -242,6 +242,7 @@ class _ImportedTracksTabState extends ConsumerState<ImportedTracksTab> {
 
     setState(() => _busy = true);
     final List<ScannedTrack> files = [];
+    List<Track> removed = const [];
     try {
       for (final String path in paths) {
         try {
@@ -251,7 +252,7 @@ class _ImportedTracksTabState extends ConsumerState<ImportedTracksTab> {
           // Illisible : le scan l'écarterait de toute façon, rien à masquer.
         }
       }
-      final List<Track> removed = await blacklist.hideFiles(files);
+      removed = await blacklist.hideFiles(files);
       await player.removeTracks({for (final Track track in removed) track.id});
     } finally {
       // Copies du sélecteur (cache Android) : seule l'identité est retenue.
@@ -262,7 +263,8 @@ class _ImportedTracksTabState extends ConsumerState<ImportedTracksTab> {
     messenger.showSnackBar(SnackBar(
       content: Text(count == 0
           ? 'Aucun fichier audio exploitable à masquer.'
-          : '$count fichier${count > 1 ? 's' : ''} ajouté${count > 1 ? 's' : ''} à la liste noire.'),
+          : '$count fichier${count > 1 ? 's' : ''} ajouté${count > 1 ? 's' : ''} à la liste noire'
+              '${removed.isEmpty ? '' : ', dont ${removed.length} retiré${removed.length > 1 ? 's' : ''} de la bibliothèque'}.'),
     ));
   }
 

@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:audio_service/audio_service.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../features/playlists/data/playlist_providers.dart';
 import '../platform/app_platform.dart';
+import '../shared/widgets/local_cover_image.dart';
 import '../storage/database/app_database.dart';
 import 'player_controller.dart';
 
@@ -71,9 +73,14 @@ class PlaylistAudioHandler extends BaseAudioHandler with SeekHandler {
     );
   }
 
-  Uri? _artUri(String path) {
-    if (path.isEmpty) return null;
-    return path.startsWith('http') ? Uri.tryParse(path) : Uri.file(path);
+  Uri? _artUri(String path) => artUriFor(path);
+
+  /// URL http(s) → `null` : la notification média ne doit pas télécharger de
+  /// pochette en ligne (local-first, RGPD) ; seul un fichier local est exposé.
+  @visibleForTesting
+  static Uri? artUriFor(String path) {
+    if (path.isEmpty || isRemoteCoverPath(path)) return null;
+    return Uri.file(path);
   }
 
   /// Fenêtre de détection des appuis multiples (= double-tap Android).

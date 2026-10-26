@@ -9,10 +9,11 @@ import '../../storage/database/app_database.dart';
 import '../../theme/design_system/vibe_design_system.dart';
 import '../../theme/vibe_engine/playlist_vibe_resolver.dart';
 import '../../theme/vibe_engine/vibe_engine.dart';
+import 'local_cover_image.dart';
 
 /// Visuel de couverture d'une playlist (Design System — PlaylistCard) :
 /// pochette personnalisée si définie (`playlist.coverImagePath`), sinon un
-/// composite 2x2 des pochettes des 4 premiers morceaux, sinon un repli
+/// composite 2x2 de 4 pochettes locales distinctes (1 à 3 : la première en pleine carte), sinon un repli
 /// générique stylisé selon la Vibe de la playlist (aucun morceau avec
 /// pochette, ou playlist vide). Toujours carrée — enrober dans un
 /// `AspectRatio(aspectRatio: 1)` si le parent n'impose pas déjà ce ratio.
@@ -64,22 +65,30 @@ class _CompositeFallback extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final AsyncValue<List<PlaylistEditorEntry>> entries = ref.watch(playlistEditorEntriesProvider(playlist.id));
+    // On filtre AVANT de limiter : des titres sans pochette en tête ne doivent
+    // pas empêcher la mosaïque. Doublons écartés (même album répété), et seules
+    // les pochettes locales comptent (une URL http n'est jamais chargée).
     final List<String> covers = (entries.value ?? const [])
-        .where((entry) => entry.track != null)
+        .map((entry) => entry.track?.coverArtPath ?? '')
+        .where((path) => path.isNotEmpty && !isRemoteCoverPath(path))
+        .toSet()
         .take(4)
-        .map((entry) => entry.track!.coverArtPath)
-        .where((path) => path.isNotEmpty)
         .toList();
 
-    return ClipRRect(
-      borderRadius: borderRadius,
-      child: covers.isEmpty ? _VibePlaceholder(vibe: playlist.resolvedVibe) : _CompositeGrid(coverPaths: covers),
-    );
+    final Widget child;
+    if (covers.isEmpty) {
+      child = _VibePlaceholder(vibe: playlist.resolvedVibe);
+    } else if (covers.length < 4) {
+      // 1 à 3 pochettes : la première en pleine carte plutôt qu'un quart d'image.
+      child = _CoverTile(path: covers.first, decodeWidth: PlaylistCoverImage._coverDecodeWidth);
+    } else {
+      child = _CompositeGrid(coverPaths: covers);
+    }
+    return ClipRRect(borderRadius: borderRadius, child: child);
   }
 }
 
-/// Composite 2x2 : cases sans pochette disponible comblées par une tuile
-/// neutre plutôt que de casser la grille ou d'afficher un vide.
+/// Composite 2x2 (exactement 4 pochettes locales distinctes).
 class _CompositeGrid extends StatelessWidget {
   const _CompositeGrid({required this.coverPaths});
 
@@ -90,20 +99,30 @@ class _CompositeGrid extends StatelessWidget {
     return GridView.count(
       crossAxisCount: 2,
       physics: const NeverScrollableScrollPhysics(),
-      children: List.generate(4, (index) {
-        if (index >= coverPaths.length) {
-          return ColoredBox(color: Theme.of(context).colorScheme.surfaceContainerHighest);
-        }
-        final String path = coverPaths[index];
-        final ImageProvider image =
-            path.startsWith('http') ? NetworkImage(path) : FileImage(File(path)) as ImageProvider;
-        return Image(
-          image: ResizeImage.resizeIfNeeded(PlaylistCoverImage._tileDecodeWidth, null, image),
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) =>
-              ColoredBox(color: Theme.of(context).colorScheme.surfaceContainerHighest),
-        );
-      }),
+      children: [
+        for (final String path in coverPaths) _CoverTile(path: path, decodeWidth: PlaylistCoverImage._tileDecodeWidth)
+      ],
+    );
+  }
+}
+
+/// Une pochette locale décodée à taille de vignette ; tuile neutre si le
+/// fichier est illisible.
+class _CoverTile extends StatelessWidget {
+  const _CoverTile({required this.path, required this.decodeWidth});
+
+  final String path;
+  final int decodeWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget neutral = ColoredBox(color: Theme.of(context).colorScheme.surfaceContainerHighest);
+    final ImageProvider? image = localCoverImage(path);
+    if (image == null) return neutral;
+    return Image(
+      image: ResizeImage.resizeIfNeeded(decodeWidth, null, image),
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) => neutral,
     );
   }
 }

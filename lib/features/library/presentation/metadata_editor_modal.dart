@@ -9,10 +9,12 @@ import 'package:path/path.dart' as p;
 import '../../../core/audio_engine/preview_player_controller.dart';
 import '../../../core/networking/metadata_api_client/online_track_result.dart';
 import '../../../core/platform/gallery_image_picker.dart';
+import '../../../core/storage/cover_art/remote_cover_localizer.dart';
 import '../../../core/storage/database/app_database.dart';
 import '../../../core/storage/database/track_enricher.dart';
 import '../../../core/storage/database/track_repository.dart';
 import '../../../core/storage/filename_sanitizer/filename_sanitizer.dart';
+import '../../settings/data/auto_enrich_preference.dart';
 import '../data/library_providers.dart';
 
 /// Terme de recherche par défaut tiré du nom du fichier audio, pour un
@@ -79,9 +81,17 @@ class _MetadataEditorModalState extends ConsumerState<MetadataEditorModal> {
   static const Duration _searchDebounceDelay = Duration(milliseconds: 500);
 
   bool _loadingSuggestions = true;
+  // Faux tant qu'aucune recherche n'a été lancée (interrupteur « Enrichissement
+  // automatique » sur OFF : rien ne part à l'ouverture, voir [initState]).
+  bool _searched = false;
   List<OnlineTrackResult> _suggestions = const [];
   bool _fetchFailed = false;
   String? _selectedCoverArtUrl;
+  // Vrai seulement si la pochette courante est une URL choisie dans les
+  // suggestions pendant cette session (action explicite) : c'est la seule URL
+  // http que l'éditeur affiche par le réseau, et la seule rapatriée à
+  // l'enregistrement. Une URL venue de la base n'est jamais chargée ici.
+  bool _coverChosenOnline = false;
   bool _saving = false;
 
   // Sélecteur de source (Section 2.3) — bascule laquelle des deux API
@@ -124,7 +134,22 @@ class _MetadataEditorModalState extends ConsumerState<MetadataEditorModal> {
     _searchTitleController = TextEditingController(text: initialSearchTitle);
 
     _selectedCoverArtUrl = widget.track.coverArtPath.isEmpty ? null : widget.track.coverArtPath;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _performSearch());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _searchOnOpen());
+  }
+
+  /// Ouvrir l'éditeur n'est pas une demande de recherche : sans l'accord de
+  /// l'interrupteur « Enrichissement automatique » (droit d'opposition), rien
+  /// n'est envoyé à Apple/MusicBrainz et c'est un bouton qui lance la
+  /// recherche. Exception : le bouton ✨ d'un morceau « À renommer » (terme
+  /// imposé, [MetadataEditorModal.initialSearchQuery]) EST une demande explicite.
+  Future<void> _searchOnOpen() async {
+    final bool allowed = widget.initialSearchQuery != null || await AutoEnrichPreference.isEnabled();
+    if (!mounted) return;
+    if (allowed) {
+      await _performSearch();
+    } else {
+      setState(() => _loadingSuggestions = false);
+    }
   }
 
   @override
@@ -157,6 +182,7 @@ class _MetadataEditorModalState extends ConsumerState<MetadataEditorModal> {
     final String title = _searchTitleController.text.trim();
 
     setState(() {
+      _searched = true;
       _loadingSuggestions = true;
       _fetchFailed = false;
     });
@@ -195,6 +221,7 @@ class _MetadataEditorModalState extends ConsumerState<MetadataEditorModal> {
       _yearController.text = suggestion.releaseYear?.toString() ?? '';
       if (suggestion.genre != null) _genreController.text = suggestion.genre!;
       _selectedCoverArtUrl = suggestion.coverArtUrl;
+      _coverChosenOnline = suggestion.coverArtUrl != null;
       _lastAppliedSuggestion = suggestion;
       _appliedSuggestionSource = _searchSource;
     });
@@ -228,7 +255,10 @@ class _MetadataEditorModalState extends ConsumerState<MetadataEditorModal> {
     final File imported =
         await ref.read(storageManagerServiceProvider).importTrackCoverImage(File(picked.path), widget.track.id);
     if (!mounted) return;
-    setState(() => _selectedCoverArtUrl = imported.path);
+    setState(() {
+      _selectedCoverArtUrl = imported.path;
+      _coverChosenOnline = false;
+    });
   }
 
   Future<void> _save() async {
@@ -247,6 +277,13 @@ class _MetadataEditorModalState extends ConsumerState<MetadataEditorModal> {
           genre: _genreController.text.trim(),
           enrichmentStatus: _resolveEnrichmentStatus(),
         );
+    // Pochette choisie en ligne = action explicite : téléchargée sur
+    // l'appareil même interrupteur OFF, en arrière-plan (la fermeture n'attend
+    // pas, et `localizeTrack` ne lève jamais d'exception).
+    final String? cover = _selectedCoverArtUrl;
+    if (_coverChosenOnline && cover != null && cover.startsWith('http')) {
+      unawaited(ref.read(remoteCoverLocalizerProvider).localizeTrack(widget.track.id));
+    }
     if (mounted) Navigator.of(context).pop();
   }
 
@@ -264,7 +301,11 @@ class _MetadataEditorModalState extends ConsumerState<MetadataEditorModal> {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _CoverPreview(path: _selectedCoverArtUrl, onTap: _pickCoverManually),
+                  _CoverPreview(
+                    path: _selectedCoverArtUrl,
+                    allowNetwork: _coverChosenOnline,
+                    onTap: _pickCoverManually,
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -355,6 +396,26 @@ class _MetadataEditorModalState extends ConsumerState<MetadataEditorModal> {
               const SizedBox(height: 8),
               if (_loadingSuggestions)
                 const Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator())
+              else if (!_searched)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                        'La recherche en ligne ne démarre pas toute seule : rien n\'est envoyé tant que tu ne la lances pas.'),
+                    const SizedBox(height: 8),
+                    Semantics(
+                      button: true,
+                      label: 'Rechercher sur ${_searchSource == EnrichmentSource.itunes ? 'iTunes' : 'MusicBrainz'}',
+                      excludeSemantics: true,
+                      child: OutlinedButton.icon(
+                        onPressed: _performSearch,
+                        icon: const Icon(Icons.search),
+                        label: Text(
+                            'Rechercher sur ${_searchSource == EnrichmentSource.itunes ? 'iTunes' : 'MusicBrainz'}'),
+                      ),
+                    ),
+                  ],
+                )
               else if (_fetchFailed)
                 Row(
                   children: [
@@ -381,6 +442,8 @@ class _MetadataEditorModalState extends ConsumerState<MetadataEditorModal> {
                               height: 40,
                               fit: BoxFit.cover,
                               semanticLabel: 'Pochette proposée pour ${suggestion.title}',
+                              // Hors-ligne en cours de route : repli plutôt qu'une erreur.
+                              errorBuilder: (context, error, stackTrace) => const Icon(Icons.broken_image_outlined),
                             ),
                           )
                         : const Icon(Icons.album_outlined),
@@ -426,14 +489,19 @@ class _MetadataEditorModalState extends ConsumerState<MetadataEditorModal> {
 /// manuel) — double-usage URL distante/chemin local, comme partout ailleurs
 /// dans l'app (voir `PlaylistCoverImage`, `_CoverThumbnail` de LibraryScreen).
 class _CoverPreview extends StatelessWidget {
-  const _CoverPreview({required this.path, required this.onTap});
+  const _CoverPreview({required this.path, required this.allowNetwork, required this.onTap});
 
   final String? path;
+
+  /// Une URL http(s) n'est chargée par le réseau que si elle vient d'être
+  /// choisie dans les suggestions ; sinon (URL déjà en base) : placeholder.
+  final bool allowNetwork;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final String? p = path;
+    final bool hidden = p != null && p.startsWith('http') && !allowNetwork;
     return GestureDetector(
       onTap: onTap,
       child: ClipRRect(
@@ -441,7 +509,7 @@ class _CoverPreview extends StatelessWidget {
         child: SizedBox(
           width: 56,
           height: 56,
-          child: p == null || p.isEmpty
+          child: p == null || p.isEmpty || hidden
               ? ColoredBox(
                   color: Theme.of(context).colorScheme.surfaceContainerHighest,
                   child: const Icon(Icons.add_photo_alternate_outlined),

@@ -9,6 +9,7 @@ import '../../../core/platform/app_platform.dart';
 import '../../../core/shared/widgets/blacklisted_import_dialog.dart';
 import '../../../core/shared/widgets/enrichment_source_dialog.dart';
 import '../../../core/shared/widgets/library_category_picker.dart';
+import '../../../core/shared/widgets/local_cover_image.dart';
 import '../../../core/shared/widgets/track_actions_sheet.dart';
 import '../../../core/storage/database/app_database.dart';
 import '../../../core/storage/database/blacklist_repository.dart';
@@ -62,6 +63,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       int failed = 0;
       int restored = 0;
       int keptHidden = 0;
+      int alreadyInLibrary = 0;
       String? lastError;
       final List<(String, BlacklistedTrack)> blacklisted = [];
       // Renommés (repli FilenameSanitizer, pas de tag ID3 exploitable) parmi
@@ -85,6 +87,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             }
           } on BlacklistedImportException catch (blocked) {
             blacklisted.add((path, blocked.entry));
+          } on AlreadyInLibraryImportException {
+            // Rien copié ni écrasé : compté à part, voir AudioImportPipeline.
+            alreadyInLibrary++;
           } catch (error) {
             // Distingué de "trop court" : un import qui échoue (stockage,
             // permission, fichier corrompu...) doit rester visible plutôt que
@@ -149,6 +154,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       if (!mounted) return;
       final String summary = [
         '$imported importé(s)',
+        if (alreadyInLibrary > 0) '$alreadyInLibrary déjà dans la bibliothèque',
         if (restored > 0) '$restored restauré(s)',
         if (keptHidden > 0) '$keptHidden laissé(s) en liste noire',
         if (renamedTracks.isNotEmpty)
@@ -547,7 +553,9 @@ class _CoverThumbnail extends StatelessWidget {
       return const CircleAvatar(child: Icon(Icons.music_note_outlined));
     }
 
-    final ImageProvider image = path.startsWith('http') ? NetworkImage(path) : FileImage(File(path)) as ImageProvider;
+    // URL http non rapatriée : pas de réseau, repli sur l'icône.
+    final ImageProvider? image = localCoverImage(path);
+    if (image == null) return const CircleAvatar(child: Icon(Icons.music_note_outlined));
     return CircleAvatar(backgroundImage: image, onBackgroundImageError: (_, __) {});
   }
 }

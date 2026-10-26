@@ -117,8 +117,8 @@ Seulement lorsque la fonction concernée est utilisée, Vibe envoie des requête
 • Apple (iTunes Search API) : titre et artiste des morceaux, ou votre recherche, pour compléter pochette, album, année et genre.
 • MusicBrainz et Cover Art Archive (MetaBrainz Foundation) : titre et artiste, lorsque Apple ne trouve rien ou que vous choisissez cette source ; les requêtes identifient l'application (nom, version, contact de l'éditeur), jamais vous.
 • Spotify : le lien de la playlist importée et, si vous les avez saisis, vos identifiants Spotify Developer.
-Au premier lancement, Vibe vous demande si vous souhaitez importer automatiquement vos fichiers audio puis, si vous acceptez, les enrichir automatiquement ; si vous refusez l'import, l'enrichissement automatique est désactivé. Il s'applique ensuite après chaque import (Apple, puis MusicBrainz en repli) tant qu'il est activé dans Paramètres > Confidentialité ; désactivé, l'import reste entièrement hors-ligne.
-Les pochettes s'affichent depuis les serveurs d'Apple et du Cover Art Archive. Comme pour toute connexion internet, votre adresse IP est alors visible par ces services, qui la traitent selon leurs propres politiques :
+Au premier lancement, Vibe vous demande si vous souhaitez importer automatiquement vos fichiers audio puis, si vous acceptez, les enrichir automatiquement ; si vous refusez l'import, l'enrichissement automatique est désactivé. Il s'applique ensuite après chaque import (Apple, puis MusicBrainz en repli) tant qu'il est activé dans Paramètres > Confidentialité ; désactivé, aucune connexion automatique n'est faite : l'import et l'affichage restent entièrement hors-ligne.
+Les pochettes trouvées sont téléchargées une seule fois depuis les serveurs d'Apple ou du Cover Art Archive, puis enregistrées sur votre appareil : leur affichage ne se connecte plus à internet. Comme pour toute connexion internet, votre adresse IP est visible par ces services lors du téléchargement, et ils la traitent selon leurs propres politiques :
 Apple : apple.com/legal/privacy
 MetaBrainz (MusicBrainz, Cover Art Archive) : metabrainz.org/privacy
 Spotify : spotify.com/legal/privacy-policy

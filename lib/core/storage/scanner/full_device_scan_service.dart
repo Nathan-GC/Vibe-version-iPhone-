@@ -148,6 +148,7 @@ class FullDeviceScanService {
       bpm: scanned.bpm,
       lastModifiedEpochMs: currentMtime,
       fileHash: hash,
+      coverArtPath: scanned.coverArtPath,
     );
   }
 }

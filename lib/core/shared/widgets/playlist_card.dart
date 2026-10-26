@@ -109,12 +109,22 @@ class _PlaylistSubtitle extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final AsyncValue<List<PlaylistEditorEntry>> entries = ref.watch(playlistEditorEntriesProvider(playlist.id));
-    final List<PlaylistEditorEntry> all = entries.value ?? const [];
+    final List<PlaylistEditorEntry>? loaded = entries.value;
+    final String by = playlist.originalCreator == null ? 'Toi' : '@${playlist.originalCreator}';
+    // Flux pas encore chargé : pas de compteur (sinon "0 morceau" un instant).
+    if (loaded == null) {
+      return Text(
+        'Par $by',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.bodySmall,
+      );
+    }
+    final List<PlaylistEditorEntry> all = loaded;
     // Morceaux lisibles d'un côté, titres importés introuvables (grisés) de
     // l'autre : ces derniers ne sont jamais joués.
     final int missing = all.where((e) => e.isMissing).length;
     final int count = all.length - missing;
-    final String by = playlist.originalCreator == null ? 'Toi' : '@${playlist.originalCreator}';
 
     return Text(
       'Par $by • $count morceau${count > 1 ? 'x' : ''}${missing > 0 ? ' · $missing grisé${missing > 1 ? 's' : ''}' : ''}',

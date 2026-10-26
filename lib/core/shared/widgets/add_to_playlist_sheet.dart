@@ -75,6 +75,11 @@ class AddToPlaylistSheet extends ConsumerWidget {
                             label: 'Annuler',
                             onPressed: () => playlistTracks.removeTrack(playlist.id, trackId),
                           ),
+                          // Un SnackBar à action est `persist` par défaut : sans
+                          // ceci il ne se ferme jamais et l'alerte suivante
+                          // (doublon) resterait invisible en file derrière.
+                          persist: false,
+                          duration: const Duration(seconds: 4),
                         ),
                       AddTrackResult.alreadyPresent => SnackBar(
                           content: const Text('Ce titre est déjà présent dans la playlist'),
@@ -85,7 +90,9 @@ class AddToPlaylistSheet extends ConsumerWidget {
                           backgroundColor: errorColor,
                         ),
                     };
-                    messenger.showSnackBar(snackBar);
+                    messenger
+                      ..hideCurrentSnackBar()
+                      ..showSnackBar(snackBar);
                   },
                 ),
               ),

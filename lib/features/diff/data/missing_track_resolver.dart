@@ -29,11 +29,17 @@ class MissingTrackResolver {
   final AudioImportPipeline _pipeline;
   final TrackRepository _trackRepository;
 
-  /// Lève [BlacklistedImportException] pour un titre en liste noire.
+  /// Lève [BlacklistedImportException] pour un titre en liste noire. Un titre
+  /// déjà en bibliothèque (fichier présent) n'est pas réimporté : le titre
+  /// existant est simplement renvoyé pour être associé.
   Future<Track?> importFromDevice(File pickedFile) async {
-    final ScannedTrack? scanned = await _pipeline.importFile(pickedFile);
-    if (scanned == null) return null;
-    return _trackRepository.findById(scanned.id);
+    try {
+      final ScannedTrack? scanned = await _pipeline.importFile(pickedFile);
+      if (scanned == null) return null;
+      return await _trackRepository.findById(scanned.id);
+    } on AlreadyInLibraryImportException catch (present) {
+      return present.existing;
+    }
   }
 
   /// Titre en liste noire que l'utilisateur a choisi de restaurer, voir

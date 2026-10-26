@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:playlist_app/core/purge/local_notification_service.dart';
+import 'package:playlist_app/core/storage/cover_art/remote_cover_auto_trigger.dart';
 import 'package:playlist_app/core/storage/database/app_database.dart';
 import 'package:playlist_app/core/storage/database/database_provider.dart';
 import 'package:playlist_app/core/storage/database/track_repository.dart';
@@ -33,6 +34,20 @@ class _FakePermissions implements OnboardingPermissions {
     _log.add('audio');
     return audioGranted;
   }
+}
+
+/// Déclencheur de rapatriement des pochettes factice : pas de flux Drift (qui
+/// laisserait un timer en attente à la fermeture) ni de réseau ; journalise
+/// seulement la passe lancée à la fin de l'onboarding.
+class _FakeCoverTrigger implements RemoteCoverAutoTrigger {
+  @override
+  Future<int> runPass() async {
+    _log.add('cover-pass');
+    return 0;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class _FakeScan implements FullDeviceScanService {
@@ -80,6 +95,7 @@ void main() {
     await tester.pumpWidget(ProviderScope(
       overrides: [
         appDatabaseProvider.overrideWithValue(db),
+        remoteCoverAutoTriggerProvider.overrideWithValue(_FakeCoverTrigger()),
         fullDeviceScanServiceProvider.overrideWithValue(scan),
         onboardingPermissionsProvider.overrideWithValue(_FakePermissions(audioGranted: audioGranted)),
       ],
@@ -133,7 +149,9 @@ void main() {
 
     await answer(tester, 'Non merci');
 
-    expect(_log, ['notifications', 'audio', 'scan']);
+    // Fin de l'onboarding : une passe de rapatriement des pochettes est lancée
+    // (le localiseur ne fera rien interrupteur OFF, voir son propre test).
+    expect(_log, ['notifications', 'audio', 'scan', 'cover-pass']);
     expect(scan.enrichPreferenceAtScan, isFalse);
     expect((await prefs()).getBool('privacy.auto_enrich_on_import'), isFalse);
     expect(find.text('PLAYER'), findsOneWidget);

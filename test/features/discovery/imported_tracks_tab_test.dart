@@ -128,7 +128,7 @@ void main() {
     await tester.tap(find.text('Masquer un fichier...'));
     await settle(tester);
 
-    expect(find.text('2 fichiers ajoutés à la liste noire.'), findsOneWidget);
+    expect(find.text('2 fichiers ajoutés à la liste noire, dont 1 retiré de la bibliothèque.'), findsOneWidget);
     expect(find.text('Liste noire (2)'), findsOneWidget);
     expect(find.text('Song c'), findsOneWidget);
     expect(find.text('Song a'), findsOneWidget);

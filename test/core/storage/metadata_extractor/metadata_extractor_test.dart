@@ -29,4 +29,41 @@ void main() {
       expect(MetadataExtractor.splitArtistTag('Ftx Band'), ['Ftx Band']);
     });
   });
+
+  group('embeddedCoverCodecOf (pochette intégrée, propriétés ffprobe)', () {
+    const audio = {'codec_type': 'audio', 'codec_name': 'mp3'};
+
+    test('detects an MP3 cover (mjpeg attached_pic)', () {
+      const cover = {
+        'codec_type': 'video',
+        'codec_name': 'mjpeg',
+        'disposition': {'attached_pic': 1},
+      };
+      expect(MetadataExtractor.embeddedCoverCodecOf([audio, cover]), 'mjpeg');
+    });
+
+    test('detects an M4A cover (png attached_pic)', () {
+      const cover = {
+        'codec_type': 'video',
+        'codec_name': 'png',
+        'disposition': {'attached_pic': 1},
+      };
+      expect(MetadataExtractor.embeddedCoverCodecOf([audio, cover]), 'png');
+    });
+
+    test('returns null for an audio-only file', () {
+      expect(MetadataExtractor.embeddedCoverCodecOf([audio]), isNull);
+      expect(MetadataExtractor.embeddedCoverCodecOf([null, audio]), isNull);
+    });
+
+    test('ignores a real video stream and a video stream with attached_pic 0', () {
+      const clip = {
+        'codec_type': 'video',
+        'codec_name': 'h264',
+        'disposition': {'attached_pic': 0},
+      };
+      const noDisposition = {'codec_type': 'video', 'codec_name': 'h264'};
+      expect(MetadataExtractor.embeddedCoverCodecOf([audio, clip, noDisposition]), isNull);
+    });
+  });
 }

@@ -232,4 +232,49 @@ void main() {
     expect(entry.position, 0);
     expect(entry.addedSinceSave, isFalse);
   });
+
+  test('upgrading from v19 renumbers only playlists with duplicate positions, missing titles included', () async {
+    final AppDatabase legacy = AppDatabase.forTesting(NativeDatabase(dbFile));
+    for (final String id in ['dup', 'ok']) {
+      await legacy.into(legacy.playlists).insert(PlaylistsCompanion.insert(id: id, title: id));
+    }
+    for (final String id in ['a', 'b', 'c', 'd', 'e']) {
+      await legacy.into(legacy.tracks).insert(TracksCompanion.insert(
+          id: id, title: id, album: '', artists: const ['A'], durationSeconds: 180, filePath: '/m/$id.mp3'));
+    }
+    // 'dup' : a=0, b=0 (doublon), grisé=1 (intercalé), c=1 (doublon avec le grisé), d=5 (trou).
+    for (final (String, int) e in const [('a', 0), ('b', 0), ('c', 1), ('d', 5)]) {
+      await legacy
+          .into(legacy.playlistTracks)
+          .insert(PlaylistTracksCompanion.insert(playlistId: 'dup', trackId: e.$1, position: e.$2));
+    }
+    await legacy.into(legacy.playlistMissingTracks).insert(PlaylistMissingTracksCompanion.insert(
+        playlistId: 'dup', position: 1, title: 'Ghost', artist: 'G', sanitizedKey: 'k', matchKey: 'm'));
+    // 'ok' : saine, avec un trou volontaire qui ne doit PAS être touché.
+    for (final (String, int) e in const [('a', 0), ('e', 3)]) {
+      await legacy
+          .into(legacy.playlistTracks)
+          .insert(PlaylistTracksCompanion.insert(playlistId: 'ok', trackId: e.$1, position: e.$2));
+    }
+    await legacy.into(legacy.playlistMissingTracks).insert(PlaylistMissingTracksCompanion.insert(
+        playlistId: 'ok', position: 1, title: 'Ghost2', artist: 'G', sanitizedKey: 'k2', matchKey: 'm2'));
+    await legacy.customStatement('PRAGMA user_version = 19');
+    await legacy.close();
+
+    final AppDatabase upgraded = AppDatabase.forTesting(NativeDatabase(dbFile));
+    addTearDown(upgraded.close);
+
+    Future<List<(String, int)>> merged(String playlistId) async {
+      final List<PlaylistTrack> t =
+          await (upgraded.select(upgraded.playlistTracks)..where((r) => r.playlistId.equals(playlistId))).get();
+      final List<PlaylistMissingTrack> m =
+          await (upgraded.select(upgraded.playlistMissingTracks)..where((r) => r.playlistId.equals(playlistId))).get();
+      return [...t.map((r) => (r.trackId, r.position)), ...m.map((r) => ('ghost:${r.title}', r.position))]
+        ..sort((x, y) => x.$2.compareTo(y.$2));
+    }
+
+    // Ordre : a(0,rowid1) b(0,rowid2) | grisé(1) vs c(1) -> principale d'abord | d(5).
+    expect(await merged('dup'), [('a', 0), ('b', 1), ('c', 2), ('ghost:Ghost', 3), ('d', 4)]);
+    expect(await merged('ok'), [('a', 0), ('ghost:Ghost2', 1), ('e', 3)]);
+  });
 }

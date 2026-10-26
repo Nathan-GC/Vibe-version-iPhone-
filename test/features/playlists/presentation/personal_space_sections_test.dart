@@ -82,6 +82,24 @@ void main() {
     await teardownTree(tester);
   });
 
+  testWidgets('first frame: no misleading chevron nor "0 morceau" before data is loaded', (tester) async {
+    await insert('a', 'Alpha');
+    final GoRouter router = GoRouter(routes: [GoRoute(path: '/', builder: (_, __) => const PersonalSpaceScreen())]);
+    await tester.pumpWidget(ProviderScope(
+      overrides: [appDatabaseProvider.overrideWithValue(db)],
+      child: MaterialApp.router(routerConfig: router),
+    ));
+    await tester.pump();
+
+    expect(find.byTooltip('Replier la section Playlists créées'), findsNothing);
+    expect(find.byTooltip('Déplier la section Playlists créées'), findsNothing);
+    expect(find.textContaining('0 morceau'), findsNothing);
+
+    await settle(tester);
+    expect(find.byTooltip('Replier la section Playlists créées'), findsOneWidget);
+    await teardownTree(tester);
+  });
+
   testWidgets('imported carousel and section are absent without imported playlists', (tester) async {
     await insert('a', 'Alpha');
     await insert(kLikedPlaylistId, 'Titres likés');

@@ -14,12 +14,18 @@ import 'insufficient_storage_exception.dart';
 /// /Music/AppFolder/ : garantit que [checkAvailableStorage] est vérifié avant
 /// chaque écriture disque (Disk Guard) et centralise le renommage des fichiers.
 class StorageManagerService {
-  StorageManagerService({DiskSpacePlus? diskSpace, FilenameSanitizer? filenameSanitizer})
-      : _diskSpace = diskSpace ?? DiskSpacePlus(),
-        _filenameSanitizer = filenameSanitizer ?? FilenameSanitizer();
+  /// [appFolderResolver] : surchargeable en test (sinon [MusicFolderResolver.resolve]).
+  StorageManagerService({
+    DiskSpacePlus? diskSpace,
+    FilenameSanitizer? filenameSanitizer,
+    Future<Directory> Function()? appFolderResolver,
+  })  : _diskSpace = diskSpace ?? DiskSpacePlus(),
+        _filenameSanitizer = filenameSanitizer ?? FilenameSanitizer(),
+        _resolveAppFolder = appFolderResolver ?? MusicFolderResolver.resolve;
 
   final DiskSpacePlus _diskSpace;
   final FilenameSanitizer _filenameSanitizer;
+  final Future<Directory> Function() _resolveAppFolder;
 
   static final RegExp _illegalFilenameChars = RegExp(r'[\\/:*?"<>|]');
 
@@ -48,7 +54,7 @@ class StorageManagerService {
     final int sizeBytes = await sourceFile.length();
     await checkAvailableStorage(sizeBytes);
 
-    final Directory appFolder = await MusicFolderResolver.resolve();
+    final Directory appFolder = await _resolveAppFolder();
 
     final SanitizedFilename sanitized = _filenameSanitizer.sanitizeFilename(p.basename(sourceFile.path));
     final String artist = sanitized.artist.replaceAll(_illegalFilenameChars, '');
@@ -93,79 +99,108 @@ class StorageManagerService {
     return candidate;
   }
 
+  /// Chemin neuf `Music/AppFolder/<folderName>/<id>_<epochMs><extension>`, unique
+  /// à chaque appel : réécrire toujours le même chemin cassait la vidéo en cours
+  /// de lecture (ExoPlayer garde le fichier ouvert) et laissait le cache d'images
+  /// Flutter (indexé par chemin) servir l'ancienne image.
+  Future<String> newOwnedFilePath(String folderName, String id, String extension) async {
+    final Directory appFolder = await _resolveAppFolder();
+    final Directory folder = Directory(p.join(appFolder.path, folderName));
+    if (!await folder.exists()) {
+      await folder.create(recursive: true);
+    }
+    int stamp = DateTime.now().millisecondsSinceEpoch;
+    String path = p.join(folder.path, '${id}_$stamp$extension');
+    // Deux appels dans la même milliseconde ne doivent pas produire le même nom.
+    while (await File(path).exists()) {
+      stamp++;
+      path = p.join(folder.path, '${id}_$stamp$extension');
+    }
+    return path;
+  }
+
+  /// Supprime, dans `<folderName>/`, les fichiers de CET [id] autres que
+  /// [keepPath] : ancien format `<id><ext>` et nouveau `<id>_<chiffres><ext>`.
+  /// Comparaison exacte du préfixe (les ids de titres contiennent eux-mêmes des
+  /// `_`) : le reste après `<id>_` doit être uniquement numérique, donc un autre
+  /// id qui commence pareil n'est jamais touché. Au mieux : erreurs d'E/S ignorées.
+  Future<void> deleteOtherOwnedFiles(String folderName, String id, {required String keepPath}) =>
+      _deleteOwned(folderName, id, keepPath: keepPath);
+
+  Future<void> _deleteOwned(
+    String folderName,
+    String id, {
+    required String keepPath,
+    bool Function(String extension)? onlyExtension,
+  }) async {
+    try {
+      final Directory appFolder = await _resolveAppFolder();
+      final Directory folder = Directory(p.join(appFolder.path, folderName));
+      if (!await folder.exists()) return;
+      final String keep = keepPath.isEmpty ? '' : p.normalize(keepPath);
+      await for (final FileSystemEntity entity in folder.list(followLinks: false)) {
+        if (entity is! File) continue;
+        if (!_isOwnedFileName(p.basename(entity.path), id)) continue;
+        if (onlyExtension != null && !onlyExtension(p.extension(entity.path))) continue;
+        if (keep.isNotEmpty && p.normalize(entity.path) == keep) continue;
+        try {
+          await entity.delete();
+        } on FileSystemException {
+          // Fichier verrouillé ou déjà parti : le prochain import réessaiera.
+        }
+      }
+    } on FileSystemException {
+      // Nettoyage purement opportuniste.
+    }
+  }
+
+  static bool _isOwnedFileName(String fileName, String id) {
+    final String name = p.basenameWithoutExtension(fileName);
+    if (name == id) return true;
+    if (!name.startsWith('${id}_')) return false;
+    final String suffix = name.substring(id.length + 1);
+    return suffix.isNotEmpty && suffix.codeUnits.every((int c) => c >= 0x30 && c <= 0x39);
+  }
+
+  static const Set<String> _videoExtensions = {'.mp4', '.mov', '.m4v', '.webm', '.mkv', '.3gp'};
+  static bool _isVideoExtension(String ext) => _videoExtensions.contains(ext.toLowerCase());
+
+  /// [sameKind] : image et vidéo de fond d'une même playlist cohabitent dans
+  /// `vibe_backgrounds/` ; importer l'une ne doit pas supprimer l'autre.
+  Future<File> _importOwned(
+    File sourceFile,
+    String folderName,
+    String id, {
+    bool Function(String extension)? sameKind,
+  }) async {
+    final int sizeBytes = await sourceFile.length();
+    await checkAvailableStorage(sizeBytes);
+
+    final String targetPath = await newOwnedFilePath(folderName, id, p.extension(sourceFile.path));
+    final File copied = await sourceFile.copy(targetPath);
+    await _deleteOwned(folderName, id, keepPath: copied.path, onlyExtension: sameKind);
+    return copied;
+  }
+
   /// Copie une image choisie via `image_picker` (Vibe Creator) dans
-  /// `Music/AppFolder/vibe_backgrounds/<playlistId>.<ext>`, en écrasant toute
-  /// image précédente pour cette playlist plutôt que d'accumuler des fichiers
-  /// orphelins à chaque changement de fond.
-  Future<File> importVibeBackgroundImage(File sourceFile, String playlistId) async {
-    final int sizeBytes = await sourceFile.length();
-    await checkAvailableStorage(sizeBytes);
+  /// `Music/AppFolder/vibe_backgrounds/<playlistId>_<epochMs>.<ext>` (chemin
+  /// unique), puis supprime les anciens fichiers de cette playlist.
+  Future<File> importVibeBackgroundImage(File sourceFile, String playlistId) =>
+      _importOwned(sourceFile, 'vibe_backgrounds', playlistId, sameKind: (String e) => !_isVideoExtension(e));
 
-    final Directory appFolder = await MusicFolderResolver.resolve();
-    final Directory vibeFolder = Directory(p.join(appFolder.path, 'vibe_backgrounds'));
-    if (!await vibeFolder.exists()) {
-      await vibeFolder.create(recursive: true);
-    }
+  /// Vidéo de fond (Vibe Creator, Section 4.3) : même dossier et même principe
+  /// que [importVibeBackgroundImage]. Le chemin unique force
+  /// `VibeVideoBackground` à recharger la vidéo.
+  Future<File> importVibeBackgroundVideo(File sourceFile, String playlistId) =>
+      _importOwned(sourceFile, 'vibe_backgrounds', playlistId, sameKind: _isVideoExtension);
 
-    final String extension = p.extension(sourceFile.path);
-    final String targetPath = p.join(vibeFolder.path, '$playlistId$extension');
-    return sourceFile.copy(targetPath);
-  }
+  /// Pochette choisie manuellement (appui long sur un morceau) dans
+  /// `Music/AppFolder/track_covers/`.
+  Future<File> importTrackCoverImage(File sourceFile, String trackId) =>
+      _importOwned(sourceFile, 'track_covers', trackId);
 
-  /// Copie une vidéo de fond choisie via `image_picker` (`pickVideo`, Vibe
-  /// Creator — Section 4.3) dans le même dossier que [importVibeBackgroundImage]
-  /// (extension différente, jamais de collision), en écrasant toute vidéo
-  /// précédente pour cette playlist.
-  Future<File> importVibeBackgroundVideo(File sourceFile, String playlistId) async {
-    final int sizeBytes = await sourceFile.length();
-    await checkAvailableStorage(sizeBytes);
-
-    final Directory appFolder = await MusicFolderResolver.resolve();
-    final Directory vibeFolder = Directory(p.join(appFolder.path, 'vibe_backgrounds'));
-    if (!await vibeFolder.exists()) {
-      await vibeFolder.create(recursive: true);
-    }
-
-    final String extension = p.extension(sourceFile.path);
-    final String targetPath = p.join(vibeFolder.path, '$playlistId$extension');
-    return sourceFile.copy(targetPath);
-  }
-
-  /// Copie une pochette choisie manuellement (édition via appui long sur un
-  /// morceau) dans `Music/AppFolder/track_covers/<trackId>.<ext>`, en
-  /// écrasant toute pochette précédemment importée pour ce morceau.
-  Future<File> importTrackCoverImage(File sourceFile, String trackId) async {
-    final int sizeBytes = await sourceFile.length();
-    await checkAvailableStorage(sizeBytes);
-
-    final Directory appFolder = await MusicFolderResolver.resolve();
-    final Directory coversFolder = Directory(p.join(appFolder.path, 'track_covers'));
-    if (!await coversFolder.exists()) {
-      await coversFolder.create(recursive: true);
-    }
-
-    final String extension = p.extension(sourceFile.path);
-    final String targetPath = p.join(coversFolder.path, '$trackId$extension');
-    return sourceFile.copy(targetPath);
-  }
-
-  /// Copie une pochette de playlist choisie depuis l'éditeur (Design System)
-  /// dans `Music/AppFolder/playlist_covers/<playlistId>.<ext>`, en écrasant
-  /// toute pochette précédente pour cette playlist plutôt que d'accumuler des
-  /// fichiers orphelins à chaque changement — même pattern que
-  /// [importVibeBackgroundImage]/[importTrackCoverImage].
-  Future<File> importPlaylistCoverImage(File sourceFile, String playlistId) async {
-    final int sizeBytes = await sourceFile.length();
-    await checkAvailableStorage(sizeBytes);
-
-    final Directory appFolder = await MusicFolderResolver.resolve();
-    final Directory coversFolder = Directory(p.join(appFolder.path, 'playlist_covers'));
-    if (!await coversFolder.exists()) {
-      await coversFolder.create(recursive: true);
-    }
-
-    final String extension = p.extension(sourceFile.path);
-    final String targetPath = p.join(coversFolder.path, '$playlistId$extension');
-    return sourceFile.copy(targetPath);
-  }
+  /// Pochette de playlist choisie depuis l'éditeur dans
+  /// `Music/AppFolder/playlist_covers/`.
+  Future<File> importPlaylistCoverImage(File sourceFile, String playlistId) =>
+      _importOwned(sourceFile, 'playlist_covers', playlistId);
 }

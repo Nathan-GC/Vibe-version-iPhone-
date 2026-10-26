@@ -1,3 +1,5 @@
+import 'dart:io' show File, FileSystemException;
+
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -184,7 +186,10 @@ class TrackRepository {
   }
 
   Future<void> upsertTrack(ScannedTrack scanned) async {
-    if (await isBlacklisted(filePath: scanned.filePath, trackKey: scanned.id)) return;
+    if (await isBlacklisted(filePath: scanned.filePath, trackKey: scanned.id)) {
+      await _deleteExtractedCover(scanned.coverArtPath);
+      return;
+    }
 
     // Un même artiste peut apparaître plusieurs fois dans le nom de fichier
     // sanitizé (ex. "Hunter X Hunter" scindé par erreur en featuring
@@ -217,6 +222,7 @@ class TrackRepository {
           lastModifiedEpochMs: Value(scanned.lastModifiedEpochMs),
           fileHash: Value(scanned.fileHash),
         ));
+        await _deleteExtractedCover(scanned.coverArtPath);
         return;
       }
       if (previous != null && previous.id != scanned.id) {
@@ -249,6 +255,8 @@ class TrackRepository {
                   Value(scanned.requiresUserReview ? EnrichmentStatus.requiresReview : EnrichmentStatus.pending),
             ),
           );
+
+      await applyExtractedCover(scanned.id, scanned.coverArtPath);
 
       await (_db.delete(_db.trackArtists)..where((t) => t.trackId.equals(scanned.id))).go();
 
@@ -685,5 +693,72 @@ class TrackRepository {
         });
       }
     });
+  }
+
+  /// Réimport d'un titre dont le fichier a disparu : seul ce qui décrit le
+  /// fichier physique est remplacé (chemin, durée, silences, empreinte). Titre,
+  /// artistes, album, statut d'enrichissement, pochette, tags et playlists
+  /// sont conservés — contrairement à [upsertTrack], qui réécrit tout.
+  Future<void> relinkFile(String trackId, ScannedTrack scanned) async {
+    await (_db.update(_db.tracks)..where((t) => t.id.equals(trackId))).write(TracksCompanion(
+      filePath: Value(scanned.filePath),
+      durationSeconds: Value(scanned.durationMs ~/ 1000),
+      trimStartMs: Value(scanned.trimStartMs),
+      trimEndMs: Value(scanned.trimEndMs),
+      lastModifiedEpochMs: Value(scanned.lastModifiedEpochMs),
+      fileHash: Value(scanned.fileHash),
+    ));
+    await applyExtractedCover(trackId, scanned.coverArtPath);
+  }
+
+  /// Pochette intégrée au fichier (extraite au scan) : appliquée UNIQUEMENT si
+  /// le titre n'a pas encore de pochette — jamais par-dessus une pochette
+  /// choisie à la main ou trouvée en ligne. Sinon le fichier extrait est
+  /// supprimé, pour ne pas laisser d'image orpheline dans `track_covers/`.
+  /// Public : aussi utilisé par le rattrapage des pochettes (EmbeddedCoverBackfill).
+  Future<void> applyExtractedCover(String trackId, String? coverPath) async {
+    if (coverPath == null) return;
+    final int updated = await (_db.update(_db.tracks)..where((t) => t.id.equals(trackId) & t.coverArtPath.equals('')))
+        .write(TracksCompanion(coverArtPath: Value(coverPath)));
+    if (updated == 0) await _deleteExtractedCover(coverPath);
+  }
+
+  Future<void> _deleteExtractedCover(String? coverPath) async {
+    if (coverPath == null) return;
+    try {
+      final File file = File(coverPath);
+      if (await file.exists()) await file.delete();
+    } on FileSystemException {
+      // Fichier verrouillé ou déjà parti : sans conséquence.
+    }
+  }
+
+  /// Filtre « pochette = URL http(s) » : ce sont les pochettes trouvées en
+  /// ligne et pas encore rapatriées sur l'appareil (RemoteCoverLocalizer).
+  Expression<bool> _hasRemoteCover($TracksTable t) => t.coverArtPath.like('http://%') | t.coverArtPath.like('https://%');
+
+  /// Ids des titres dont la pochette est encore une URL http(s).
+  Future<List<String>> trackIdsWithRemoteCover() async {
+    final List<Track> rows = await (_db.select(_db.tracks)..where(_hasRemoteCover)).get();
+    return [for (final Track t in rows) t.id];
+  }
+
+  /// Nombre de titres à pochette http(s), en flux : sert à déclencher un
+  /// rapatriement quand l'enrichissement en écrit de nouvelles.
+  Stream<int> watchRemoteCoverCount() {
+    final JoinedSelectStatement<$TracksTable, Track> query = _db.selectOnly(_db.tracks)
+      ..addColumns([_db.tracks.id.count()])
+      ..where(_hasRemoteCover(_db.tracks));
+    return query.map((row) => row.read(_db.tracks.id.count()) ?? 0).watchSingle().distinct();
+  }
+
+  /// Remplace l'URL [remoteUrl] par le chemin local [localPath] SEULEMENT si la
+  /// pochette du titre est toujours cette URL (elle a pu être changée à la
+  /// main pendant le téléchargement). Renvoie `true` si la ligne a été modifiée.
+  Future<bool> replaceRemoteCoverWithLocal(String trackId, String remoteUrl, String localPath) async {
+    final int updated = await (_db.update(_db.tracks)
+          ..where((t) => t.id.equals(trackId) & t.coverArtPath.equals(remoteUrl)))
+        .write(TracksCompanion(coverArtPath: Value(localPath)));
+    return updated > 0;
   }
 }

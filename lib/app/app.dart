@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/platform/app_platform.dart';
 import '../core/purge/purge_providers.dart';
 import '../core/shared/onboarding_storage.dart';
+import '../core/storage/cover_art/remote_cover_auto_trigger.dart';
+import '../core/storage/metadata_extractor/embedded_cover_backfill.dart';
 import '../core/theme/global_theme/global_theme.dart';
 import '../core/theme/vibe_engine/active_vibe_provider.dart' show defaultVibeFor;
 import '../core/theme/vibe_engine/vibe_engine.dart';
@@ -53,6 +55,14 @@ class _PlaylistAppState extends ConsumerState<PlaylistApp> {
         await ref.read(localNotificationServiceProvider).initialize(
               onNotificationTap: () => appRouter.go('/space/cleanup'),
             );
+        // Pochettes trouvées en ligne et encore stockées sous forme d'URL :
+        // téléchargées une fois pour toutes sur l'appareil (jamais avant la
+        // fin de l'onboarding, ni interrupteur « Enrichissement automatique »
+        // sur OFF — relus par le localiseur à chaque passe). Le service reste
+        // ensuite à l'écoute des nouvelles pochettes et de l'interrupteur.
+        unawaited(ref.read(remoteCoverAutoTriggerProvider).runPass());
+        // Rattrapage des pochettes intégrées aux fichiers déjà importés (local, sans réseau).
+        unawaited(ref.read(embeddedCoverBackfillProvider).runOnce());
       }
 
       await ref.read(purgeCheckOnLaunchProvider.future);

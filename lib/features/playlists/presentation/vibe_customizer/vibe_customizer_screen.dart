@@ -210,17 +210,21 @@ class _CustomVibeEditorState extends ConsumerState<_CustomVibeEditor> {
   /// Réordonne les couleurs sélectionnées : l'ordre = l'ordre du dégradé.
   void _reorderColors(int oldIndex, int newIndex) {
     setState(() {
-      final Color moved = _selectedColors.removeAt(oldIndex);
-      _selectedColors.insert(newIndex, moved);
+      // Nouvelle liste (jamais de mutation en place) : l'aperçu passe cette
+      // instance au LinearGradient, et une liste partagée entre l'ancienne et la
+      // nouvelle BoxDecoration les fait juger égales -> pas de repaint.
+      final List<Color> reordered = [..._selectedColors];
+      reordered.insert(newIndex, reordered.removeAt(oldIndex));
+      _selectedColors = reordered;
     });
   }
 
   void _toggleColor(Color color) {
     setState(() {
       if (_selectedColors.contains(color)) {
-        if (_selectedColors.length > 1) _selectedColors.remove(color);
+        if (_selectedColors.length > 1) _selectedColors = [..._selectedColors]..remove(color);
       } else if (_selectedColors.length < 2) {
-        _selectedColors.add(color);
+        _selectedColors = [..._selectedColors, color];
       } else {
         _selectedColors = [_selectedColors.last, color];
       }
@@ -245,6 +249,18 @@ class _CustomVibeEditorState extends ConsumerState<_CustomVibeEditor> {
       _pendingVideoPath = picked.path;
       _clearVideo = false;
     });
+  }
+
+  /// Supprime (au mieux) un ancien fond, uniquement s'il vit dans le dossier
+  /// `vibe_backgrounds` de l'app — jamais un fichier externe.
+  Future<void> _deleteOwnedBackground(String path) async {
+    if (path.isEmpty || !path.split(RegExp(r'[\\/]')).contains('vibe_backgrounds')) return;
+    try {
+      final File file = File(path);
+      if (await file.exists()) await file.delete();
+    } on FileSystemException {
+      // Fichier verrouillé ou déjà supprimé : sans conséquence.
+    }
   }
 
   Future<void> _save() async {
@@ -279,6 +295,9 @@ class _CustomVibeEditorState extends ConsumerState<_CustomVibeEditor> {
             effect: _selectedEffect,
             backgroundVideoPath: backgroundVideoPath,
           );
+      // Fond retiré : la base ne le référence plus, on libère le fichier.
+      if (_clearVideo) await _deleteOwnedBackground(widget.playlist.customBackgroundVideoPath);
+      if (_clearImage) await _deleteOwnedBackground(widget.playlist.customBackgroundImagePath);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Vibe personnalisée appliquée')));
       }

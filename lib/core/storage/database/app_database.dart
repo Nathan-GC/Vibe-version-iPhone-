@@ -299,7 +299,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 19;
+  int get schemaVersion => 20;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -446,6 +446,51 @@ class AppDatabase extends _$AppDatabase {
             // colonnes additives, les lignes existantes gardent null / false.
             await m.addColumn(playlists, playlists.carouselPosition);
             await m.addColumn(playlistTracks, playlistTracks.addedSinceSave);
+          }
+          if (from < 20) {
+            // Positions dupliquées héritées (AN-12) : un bug antérieur à la
+            // v1.3.7 a laissé des playlists (notamment "Tous les titres
+            // importés") où plusieurs lignes partagent la même position. Seules
+            // les playlists touchées sont renumérotées (base 0, comme
+            // `MAX(position) + 1` à l'insertion), les autres restent
+            // strictement intactes. Les deux tables partagent l'espace de
+            // numérotation : le doublon se cherche sur leur réunion.
+            final List<QueryRow> broken = await customSelect(
+              'SELECT DISTINCT playlist_id FROM ('
+              'SELECT playlist_id, position FROM playlist_tracks '
+              'UNION ALL SELECT playlist_id, position FROM playlist_missing_tracks'
+              ') GROUP BY playlist_id, position HAVING COUNT(*) > 1',
+            ).get();
+            for (final QueryRow row in broken) {
+              final String playlistId = row.read<String>('playlist_id');
+              // Ordre actuel (position), puis départage stable : la table
+              // principale (morceaux jouables) avant les grisés, puis l'ordre
+              // d'insertion (rowid) — déterministe, sans dépendre d'un tri SQLite
+              // non défini sur les égalités.
+              final List<QueryRow> ordered = await customSelect(
+                'SELECT 0 AS src, track_id AS ref, position, rowid AS rid FROM playlist_tracks WHERE playlist_id = ?1 '
+                'UNION ALL '
+                'SELECT 1 AS src, CAST(id AS TEXT) AS ref, position, rowid AS rid FROM playlist_missing_tracks '
+                'WHERE playlist_id = ?1 ORDER BY position, src, rid',
+                variables: [Variable.withString(playlistId)],
+              ).get();
+              int next = 0;
+              for (final QueryRow line in ordered) {
+                final String ref = line.read<String>('ref');
+                if (line.read<int>('src') == 0) {
+                  await customUpdate(
+                    'UPDATE playlist_tracks SET position = ? WHERE playlist_id = ? AND track_id = ?',
+                    variables: [Variable.withInt(next), Variable.withString(playlistId), Variable.withString(ref)],
+                  );
+                } else {
+                  await customUpdate(
+                    'UPDATE playlist_missing_tracks SET position = ? WHERE id = ?',
+                    variables: [Variable.withInt(next), Variable.withInt(int.parse(ref))],
+                  );
+                }
+                next++;
+              }
+            }
           }
         },
       );

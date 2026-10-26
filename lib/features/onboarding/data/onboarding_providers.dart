@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -6,6 +8,7 @@ import '../../../core/purge/local_notification_service.dart';
 import '../../../core/purge/purge_providers.dart';
 import '../../../core/shared/onboarding_storage.dart';
 import '../../../core/shared/permission_retry.dart';
+import '../../../core/storage/cover_art/remote_cover_auto_trigger.dart';
 import '../../../core/storage/database/database_provider.dart';
 import '../../../core/storage/database/track_auto_enricher.dart';
 import '../../../core/storage/database/track_repository.dart';
@@ -166,6 +169,10 @@ class OnboardingScanController extends Notifier<OnboardingScanState> {
     }
 
     await ref.read(onboardingStorageProvider).markCompleted();
+    // L'enrichissement vient d'écrire des URL de pochettes : rapatriées en
+    // arrière-plan (sans retarder l'écran de fin), à condition que
+    // l'interrupteur soit ON — vérifié par le localiseur.
+    unawaited(ref.read(remoteCoverAutoTriggerProvider).runPass());
   }
 }
 

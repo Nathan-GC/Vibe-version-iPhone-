@@ -6,7 +6,7 @@ class RawTrackMetadata {
     this.album,
     this.genre,
     this.durationMs,
-    this.coverArtBytes,
+    this.embeddedCoverCodec,
     this.bpm,
   });
 
@@ -15,7 +15,10 @@ class RawTrackMetadata {
   final String? album;
   final String? genre;
   final int? durationMs;
-  final List<int>? coverArtBytes;
+  // Codec ("mjpeg", "png"…) de la pochette intégrée au fichier, `null` s'il n'en
+  // a pas. Seule la présence est détectée ici : l'image est écrite sur disque
+  // par EmbeddedCoverExtractor, uniquement pour un traitement complet.
+  final String? embeddedCoverCodec;
   // Lu depuis le tag ID3 TBPM quand présent (rip déjà analysé par un autre
   // outil) — aucune détection de tempo par analyse audio n'est effectuée ici.
   final int? bpm;

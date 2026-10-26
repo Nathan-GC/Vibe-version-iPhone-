@@ -20,6 +20,19 @@ class BlacklistedImportException implements Exception {
   String toString() => '« ${entry.title} » est dans la liste noire';
 }
 
+/// Import sans effet : le titre du fichier choisi est déjà en bibliothèque et
+/// son fichier existe encore. Rien n'a été copié ni écrasé (édition manuelle,
+/// statut d'enrichissement et fichier protégé restent intacts) ; [existing]
+/// est le titre en base, à associer ou à signaler comme « déjà présent ».
+class AlreadyInLibraryImportException implements Exception {
+  const AlreadyInLibraryImportException(this.existing);
+
+  final Track existing;
+
+  @override
+  String toString() => '« ${existing.title} » est déjà dans la bibliothèque';
+}
+
 /// Import d'un fichier audio choisi par l'utilisateur : copie vers le
 /// dossier de l'app (StorageManagerService, Disk Guard), scan (ID3/nom de
 /// fichier, filtre de durée, silences — LibraryScanService), puis insertion
@@ -52,11 +65,24 @@ class AudioImportPipeline {
   /// liste noire (même clé, ou même titre + artiste) est refusé AVANT toute
   /// copie : [BlacklistedImportException]. Relance toute erreur, copie déjà
   /// nettoyée.
+  ///
+  /// Titre déjà en base (même clé) : si son fichier existe encore, rien n'est
+  /// copié ni écrit ([AlreadyInLibraryImportException]) — un réimport ne doit
+  /// pas écraser l'édition manuelle ni re-pointer un fichier protégé vers une
+  /// copie supprimable. Si son fichier a disparu, la nouvelle copie ne
+  /// remplace que le lien vers le fichier ([TrackRepository.relinkFile]) et le
+  /// titre est renvoyé comme importé, sans `wasRenamedFromFilename` : il est
+  /// déjà enrichi ou édité, l'enrichissement auto ne doit pas le relancer.
   Future<ScannedTrack?> importFile(File source) async {
     final ScannedTrack? identity = await _scanService.identify(source);
     if (identity == null) return null;
     final BlacklistedTrack? hidden = await _blacklist.findMatch(identity);
     if (hidden != null) throw BlacklistedImportException(hidden);
+
+    final Track? existing = await _trackRepository.findById(identity.id);
+    if (existing != null && await File(existing.filePath).exists()) {
+      throw AlreadyInLibraryImportException(existing);
+    }
 
     final ImportedAudioFile imported = await _storageManager.importAudioFile(source);
     try {
@@ -64,6 +90,23 @@ class AudioImportPipeline {
       if (track == null) {
         await _discard(imported.file);
         return null;
+      }
+      if (existing != null) {
+        await _trackRepository.relinkFile(existing.id, track);
+        return ScannedTrack(
+          id: existing.id,
+          title: existing.title,
+          album: existing.album,
+          primaryArtist: track.primaryArtist,
+          artists: existing.artists,
+          filePath: track.filePath,
+          durationMs: track.durationMs,
+          requiresUserReview: false,
+          trimStartMs: track.trimStartMs,
+          trimEndMs: track.trimEndMs,
+          lastModifiedEpochMs: track.lastModifiedEpochMs,
+          fileHash: track.fileHash,
+        );
       }
       await _trackRepository.upsertTrack(track);
       return track;
@@ -83,7 +126,11 @@ class AudioImportPipeline {
       case RestoreOutcome.restored || RestoreOutcome.alreadyInLibrary:
         return BlacklistRepository.trackKeyOf(entry);
       case RestoreOutcome.fileMissing || RestoreOutcome.unhidden:
-        return (await importFile(source))?.id;
+        try {
+          return (await importFile(source))?.id;
+        } on AlreadyInLibraryImportException catch (present) {
+          return present.existing.id;
+        }
     }
   }
 

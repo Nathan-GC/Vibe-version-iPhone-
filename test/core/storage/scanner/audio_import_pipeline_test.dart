@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -190,6 +191,64 @@ void main() {
       expect(appFolder.listSync(), hasLength(1));
       expect((await db.select(db.tracks).getSingle()).id, sourceKey);
       expect(await db.select(db.blacklistedTracks).get(), isEmpty);
+    });
+  });
+
+  group('AN-03 — reimport of a title already in the library', () {
+    const String key = 'one-more-time__daft-punk';
+
+    /// Titre déjà en base, édité à la main (titre/album différents des tags du
+    /// fichier source, statut `enrichedManualEdit`).
+    Future<void> seedEdited(String path) async {
+      await TrackRepository(db).upsertTrack(ScannedTrack(
+        id: key,
+        title: 'One More Time',
+        album: '',
+        primaryArtist: 'Daft Punk',
+        artists: const ['Daft Punk'],
+        filePath: path,
+        durationMs: 320000,
+        requiresUserReview: false,
+        trimStartMs: 0,
+        trimEndMs: 0,
+      ));
+      await (db.update(db.tracks)..where((t) => t.id.equals(key))).write(const TracksCompanion(
+        album: Value('Discovery (édité)'),
+        coverArtPath: Value('/covers/omt.jpg'),
+        enrichmentStatus: Value(EnrichmentStatus.enrichedManualEdit),
+      ));
+    }
+
+    test('file still present: nothing is copied or overwritten', () async {
+      final File protected = File(p.join(sourceDir.path, 'protected.mp3'))..writeAsBytesSync([9]);
+      await seedEdited(protected.path);
+
+      await expectLater(
+        pipeline(_FakeMetadataExtractor()).importFile(sourceFile()),
+        throwsA(isA<AlreadyInLibraryImportException>().having((e) => e.existing.id, 'existing', key)),
+      );
+
+      expect(appFolder.listSync(), isEmpty);
+      final Track saved = await db.select(db.tracks).getSingle();
+      expect(saved.filePath, protected.path);
+      expect(saved.album, 'Discovery (édité)');
+      expect(saved.enrichmentStatus, EnrichmentStatus.enrichedManualEdit);
+    });
+
+    test('file gone: only the file link is replaced, edits are kept', () async {
+      await seedEdited(p.join(sourceDir.path, 'disparu.mp3'));
+
+      final ScannedTrack? track = await pipeline(_FakeMetadataExtractor()).importFile(sourceFile());
+
+      expect(track?.id, key);
+      expect(track?.wasRenamedFromFilename, isFalse, reason: 'déjà enrichi : no auto-enrichment restart');
+      expect(appFolder.listSync(), hasLength(1));
+      final Track saved = await db.select(db.tracks).getSingle();
+      expect(saved.filePath, appFolder.listSync().single.path);
+      expect(saved.durationSeconds, 0, reason: 'physical duration of the new file (fake extractor reports none)');
+      expect(saved.album, 'Discovery (édité)');
+      expect(saved.coverArtPath, '/covers/omt.jpg');
+      expect(saved.enrichmentStatus, EnrichmentStatus.enrichedManualEdit);
     });
   });
 }

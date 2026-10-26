@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -8,6 +7,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:palette_generator/palette_generator.dart';
 
 import '../../../core/animation/tempo_sync/tempo_sync_controller.dart';
+import '../../../core/shared/widgets/local_cover_image.dart';
 import '../../../core/theme/vibe_engine/vibe_engine.dart';
 
 /// Photo de fond de la Vibe Neon (Vitre pluvieuse sur ville cyberpunk) — voir
@@ -213,26 +213,29 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
     if (path == _paletteSourcePath) return;
 
     List<Color>? colors;
-    try {
-      final ImageProvider image = path.startsWith('http') ? NetworkImage(path) : FileImage(File(path));
-      // Décodée en 112x112 (Lot 1.1, même taille que l'API Palette
-      // d'Android) : en pleine résolution, chaque changement de piste
-      // décodait la pochette (1000 à 3000 px, 4 à 36 Mo) puis analysait
-      // chaque pixel sur le thread UI — mémoire et saccades qui
-      // s'accumulaient au fil des playlists. Les proportions de couleurs,
-      // seules utiles ici, sont identiques.
-      final PaletteGenerator palette = await PaletteGenerator.fromImageProvider(
-        ResizeImage(image, width: 112, height: 112),
-        maximumColorCount: 12,
-      );
-      final List<Color> extracted = [
-        if (palette.dominantColor != null) palette.dominantColor!.color,
-        if (palette.vibrantColor != null) palette.vibrantColor!.color,
-        if (palette.mutedColor != null) palette.mutedColor!.color,
-      ];
-      colors = extracted.length >= 2 ? extracted : null;
-    } catch (_) {
-      colors = null;
+    // URL http non rapatriée : pas de réseau, donc pas de palette (repli).
+    final ImageProvider? image = localCoverImage(path);
+    if (image != null) {
+      try {
+        // Décodée en 112x112 (Lot 1.1, même taille que l'API Palette
+        // d'Android) : en pleine résolution, chaque changement de piste
+        // décodait la pochette (1000 à 3000 px, 4 à 36 Mo) puis analysait
+        // chaque pixel sur le thread UI — mémoire et saccades qui
+        // s'accumulaient au fil des playlists. Les proportions de couleurs,
+        // seules utiles ici, sont identiques.
+        final PaletteGenerator palette = await PaletteGenerator.fromImageProvider(
+          ResizeImage(image, width: 112, height: 112),
+          maximumColorCount: 12,
+        );
+        final List<Color> extracted = [
+          if (palette.dominantColor != null) palette.dominantColor!.color,
+          if (palette.vibrantColor != null) palette.vibrantColor!.color,
+          if (palette.mutedColor != null) palette.mutedColor!.color,
+        ];
+        colors = extracted.length >= 2 ? extracted : null;
+      } catch (_) {
+        colors = null;
+      }
     }
 
     // Zap rapide : une extraction plus lente partie avant ne doit pas écraser
