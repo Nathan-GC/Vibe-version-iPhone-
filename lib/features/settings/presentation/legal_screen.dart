@@ -4,10 +4,10 @@ import '../../../core/platform/app_platform.dart';
 import '../../../core/shared/constants/app_constants.dart';
 import '../../../core/theme/design_system/app_spacing.dart';
 
-// À compléter avant toute publication (mentions légales, RGPD : identité et
-// contact du responsable de traitement obligatoires).
-const String _editor = '[Nom et prénom, ou raison sociale]';
-const String _editorAddress = '[Adresse postale]';
+// Mentions légales et RGPD : identité et contact du responsable de traitement
+// (renseignés par l'éditeur le 27/10/2026).
+const String _editor = 'Nathan Gillot';
+const String _editorAddress = '22370';
 const String _contactEmail = AppConstants.contactEmail;
 const String _backgroundImageCredit = '[Auteur, source et licence de l\'image de fond Neon (cyberpunk_city_1.png)]';
 

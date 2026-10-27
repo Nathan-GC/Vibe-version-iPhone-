@@ -2,8 +2,8 @@ class AppConstants {
   static const Duration minTrackDuration = Duration(seconds: 30);
 
   /// Contact de l'éditeur — affiché dans Paramètres > Légal et exigé par
-  /// MusicBrainz dans le User-Agent. À compléter avant publication.
-  static const String contactEmail = '[Adresse e-mail de contact]';
+  /// MusicBrainz dans le User-Agent (envoi validé par l'éditeur).
+  static const String contactEmail = 'nathan.gillotciroldi@gmail.com';
 
   /// Build destiné à Google Play : `flutter build apk --dart-define=PLAY_STORE=true`.
   /// Play interdit l'auto-mise à jour hors Play Store : le bouton "Mise à
