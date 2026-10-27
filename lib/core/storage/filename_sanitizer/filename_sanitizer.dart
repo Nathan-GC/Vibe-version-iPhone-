@@ -95,7 +95,14 @@ class FilenameSanitizer {
   // "IWannaBeYours") — fréquent dans les noms compacts sans espaces d'un
   // convertisseur en particulier. Purement additif (n'efface jamais rien),
   // donc sans risque sur les noms déjà correctement espacés.
-  static final RegExp _camelCaseBoundary = RegExp(r'(?<=[a-zA-Z0-9])(?=[A-Z][a-z])');
+  // Classes Unicode (\p{L}/\p{Lu}) plutôt qu'ASCII : sans ça, "ÉricClapton" ou
+  // "BeyoncéKnowles" ne se découpaient jamais (É/é hors de [A-Z]/[a-z]).
+  static final RegExp _camelCaseBoundary = RegExp(r'(?<=[\p{L}\p{N}])(?=\p{Lu}\p{Ll})', unicode: true);
+  // Pronom "I" collé après une minuscule ("DoIWanna" -> "Do IWanna") : la règle
+  // générale ne le sépare pas (un "I" suivi d'une majuscule n'est pas une
+  // frontière "Majuscule+minuscule") ; on isole le "I", puis
+  // [_camelCaseBoundary] sépare le mot qui suit.
+  static final RegExp _camelPronounI = RegExp(r'(?<=\p{Ll})(?=I\p{Lu}\p{Ll})', unicode: true);
 
   // Séparateurs entre artistes multiples au sein du segment artiste (jamais
   // appliqué au titre) : virgule, esperluette, "x" isolé, "vs", "feat.",
@@ -106,10 +113,65 @@ class FilenameSanitizer {
   // suivi d'un espace (aucune frontière mot/non-mot entre deux non-mots), ce
   // qui aurait laissé le point traîner devant l'artiste suivant ("feat. Sia"
   // -> ". Sia" au lieu de "Sia").
+  // "feat"/"ft" sont gardés par `(?<![A-Za-z])` et non `\b` : un `\b` refusait
+  // "French79feat.Sarah" (chiffre juste avant = pas de frontière de mot), alors
+  // que "Stanft.Dido" ne doit pas être coupé au milieu d'un mot (lettre avant).
   static final RegExp _artistSeparator = RegExp(
-    r'\s*,\s*|\s*&\s*|\s+x\s+|\s*\bvs(?:\.|\b)\s*|\s*\bfeat(?:\.|\b)\s*|\s*\bft(?:\.|\b)\s*',
+    r'\s*,\s*|\s*&\s*|\s+x\s+|\s*\bvs(?:\.|\b)\s*|\s*(?<![A-Za-z])feat(?:\.|\b)\s*|\s*(?<![A-Za-z])ft(?:\.|\b)\s*',
     caseSensitive: false,
   );
+  // Clause "feat./ft./featuring" présente dans le TITRE : soit entre
+  // parenthèses/crochets, soit nue après un espace, soit collée au titre
+  // ("Stanft.Dido" : point obligatoire, sinon "Aft"/"Loft" seraient coupés).
+  // Les invités vont dans `featuringArtists` et la clause quitte le titre.
+  static final RegExp _titleFeat = RegExp(
+    r'[\(\[]\s*(?:feat|ft|featuring)\b\.?\s*([^\(\)\[\]]+?)\s*[\)\]]'
+    r'|(?<=\s)(?:feat|ft|featuring)(?:\.\s*|\s+)([^\(\)\[\]]+?)(?=\s*(?:[\(\[]|$))'
+    r'|(?<=[A-Za-z0-9\)\]])(?:feat|ft)\.\s*([^\(\)\[\]]+?)(?=\s*(?:[\(\[]|$))',
+    caseSensitive: false,
+  );
+  // Clause "(Feat. X)" / "[ft X]" située dans le SEGMENT ARTISTE ("David
+  // Guetta (Feat. Ne-Yo & Akon)"). Sensible à la casse exprès : le mot-clé
+  // est écrit [Ff]… à la main afin d'accepter une clause collée où le nom
+  // commence par une majuscule ("(ftNataliaKills)", "(Feat.ColbyO'Donis)") —
+  // `` est inopérant entre "ft" et une majuscule collée, et le lookahead
+  // `(?=\p{Lu})` remplace la frontière. Sans cette exigence (point, espace ou
+  // majuscule après le mot-clé), "(Feature)" ou "(Ftw)" seraient pris pour une
+  // clause. Une parenthèse SANS feat ("Artiste (Band)") n'est jamais touchée.
+  static final RegExp _artistFeat = RegExp(
+    r'[\(\[]\s*(?:[Ff]eaturing|[Ff]eat|[Ff][Tt])(?:\.\s*|\s+|(?=\p{Lu}))([^\(\)\[\]]+?)\s*[\)\]]',
+    unicode: true,
+  );
+  // Texte recopié après un tag "(Lyrics)" ("Titre (Lyrics) paroles de la
+  // chanson recopiées...") : bruit de convertisseur. Le lookahead négatif
+  // épargne "(Lyrics) feat. X" (vrai featuring) ; le groupe 3 conserve un
+  // éventuel identifiant numérique terminal pour que [_trailingNumericId] le
+  // retire ensuite comme d'habitude.
+  static final RegExp _lyricsTail = RegExp(
+    r'([\(\[]\s*(?:official\s*)?(?:lyrics?|paroles?)\s*[\)\]])\s+(?!(?:ft|feat|featuring|x|vs|with)\b)'
+    r'([^\(\)\[\]]+?)((?:_\d{6,})?)\s*$',
+    caseSensitive: false,
+  );
+  // Suffixe "(1)", "(2)"... ajouté par l'OS/le navigateur à un téléchargement
+  // en double : jamais du contenu de titre.
+  static final RegExp _dupSuffix = RegExp(r'(?:\s*\(\d{1,2}\))+\s*$');
+  // "Titre by Artiste" sans séparateur " - " (fichiers de convertisseurs).
+  static final RegExp _byArtist = RegExp(r'^(.+?)\s+by\s+(.+)$', caseSensitive: false);
+  // ... sauf quand "by" est suivi d'un simple pronom : c'est alors le titre
+  // lui-même ("Stand by Me", "Stand by You"), jamais un nom d'artiste.
+  static final RegExp _byPronounOnly = RegExp(
+    r'^(?:me|you|u|us|him|her|them|it|myself|yourself|ourselves|themselves)$',
+    caseSensitive: false,
+  );
+  // Aides à la distinction entre un tiret de mot composé ("après-midi") et un
+  // séparateur artiste/titre, et à la détection d'un séparateur converti en
+  // suite d'espaces ou en " _ " (perdu sinon par l'écrasement des espaces).
+  static final RegExp _dashChar = RegExp(r'[-–—]');
+  static final RegExp _lowerLetter = RegExp(r'\p{Ll}', unicode: true);
+  static final RegExp _whitespaceRun = RegExp(r'\s{2,}|\s_\s');
+  static final RegExp _anyWhitespace = RegExp(r'\s+');
+  // Emoji 🎵 : certains téléchargeurs nomment "Titre - Artiste 🎵" (ordre inversé).
+  static const String _musicNoteEmoji = '\u{1F3B5}';
 
   SanitizedFilename sanitizeFilename(String rawFilename) {
     final String withoutExtension = rawFilename.replaceAll(RegExp(r'\.[^.]+$'), '');
@@ -130,6 +192,102 @@ class FilenameSanitizer {
       withoutTrackNumber = withoutTrackNumber.replaceFirst(_trackNumberPrefix, '');
     } while (withoutTrackNumber != previous);
 
+    final firstPass = _splitIntoSegments(withoutTrackNumber);
+    List<String> parts = firstPass.parts;
+
+    // "Titre by Artiste" sans séparateur " - " (ex. "Till I Collapse by
+    // Eminem", surtout avec des noms issus de convertisseurs). Seulement quand
+    // rien d'autre n'a pu découper le nom, et si le côté artiste reste court
+    // (<= 5 mots) : "Ben E. King - Stand by Me" a déjà deux segments et n'est
+    // jamais concerné. Revue manuelle conservée : le découpage reste une
+    // heuristique.
+    if (parts.length == 1) {
+      final Match? byMatch = _byArtist.firstMatch(parts[0]);
+      if (byMatch != null &&
+          byMatch.group(2)!.trim().split(_anyWhitespace).length <= 5 &&
+          !_byPronounOnly.hasMatch(byMatch.group(2)!.trim())) {
+        final List<String> artists = _artistsOfSegment(byMatch.group(2)!).map(restoreProtectedNames).toList();
+        if (artists.isNotEmpty) {
+          return SanitizedFilename(
+            artist: artists.first,
+            featuringArtists: artists.length > 1 ? artists.sublist(1) : const [],
+            title: restoreProtectedNames(_denoiseSegment(byMatch.group(1)!.trim())),
+            requiresUserReview: true,
+          );
+        }
+      }
+    }
+
+    // Séparateur converti en suite d'espaces ou en " _ " par un téléchargeur
+    // ("Artiste   Titre") : l'écrasement des espaces l'a fait disparaître, donc
+    // on le rétablit en " - " sur le nom d'origine (hors crochets) et on relance
+    // la chaîne ; adopté seulement s'il produit effectivement 2 segments ou plus.
+    if (parts.length == 1) {
+      final String? withSeparator = _replaceFirstWhitespaceRun(withoutTrackNumber.trim());
+      if (withSeparator != null) {
+        final List<String> retried = _splitIntoSegments(withSeparator).parts;
+        if (retried.length >= 2) parts = retried;
+      }
+    }
+
+    // Convention "Titre - Artiste 🎵" : l'emoji signale un ordre inversé. On le
+    // retire puis on permute AVANT [_assemble] : l'extraction du featuring du
+    // titre (clause "feat." du titre) s'y applique au segment désormais en
+    // seconde position, et celle d'une clause "(Feat. X)" du segment artiste
+    // au segment désormais en première position ([_artistsOfSegment]).
+    if (rawFilename.contains(_musicNoteEmoji)) {
+      parts = parts.map((p) => p.replaceAll(_musicNoteEmoji, '').trim()).where((p) => p.isNotEmpty).toList();
+      if (parts.length == 2) parts = [parts[1], parts[0]];
+    }
+
+    if (parts.length == 2) {
+      // (Le cas d'un second segment qui répète l'artiste est traité en amont,
+      // dans [_splitIntoSegments] : le segment redondant est déjà retiré.)
+      return _assemble(
+          artistSegment: parts[0], title: parts[1], restore: restoreProtectedNames, requiresUserReview: false);
+    }
+
+    if (parts.length > 2) {
+      // Séparateurs multiples (ex. plusieurs "-") : ambigu, best-effort + review manuelle.
+      return _assemble(
+          artistSegment: parts.first,
+          title: parts.sublist(1).join(' - '),
+          restore: restoreProtectedNames,
+          requiresUserReview: true);
+    }
+
+    // Aucun séparateur trouvé : impossible de distinguer artiste/titre.
+    final String single = parts.isNotEmpty ? parts.first : firstPass.normalized;
+    return SanitizedFilename(
+        artist: 'Unknown', title: restoreProtectedNames(_denoiseSegment(single)), requiresUserReview: true);
+  }
+
+  /// Construit le résultat à partir du segment artiste et du titre : artistes
+  /// multiples du segment artiste + invités d'une clause "feat." du titre
+  /// ([_extractTitleFeat]), qui quitte alors le titre.
+  SanitizedFilename _assemble({
+    required String artistSegment,
+    required String title,
+    required String Function(String) restore,
+    required bool requiresUserReview,
+  }) {
+    final List<String> artists = _artistsOfSegment(artistSegment).map(restore).toList();
+    final (String, List<String>) feat = _extractTitleFeat(title);
+    final List<String> all = [...artists, ...feat.$2.map(restore)];
+    return SanitizedFilename(
+      artist: all.isNotEmpty ? all.first : 'Unknown',
+      featuringArtists: all.length > 1 ? all.sublist(1) : const [],
+      title: restore(feat.$1),
+      requiresUserReview: requiresUserReview,
+    );
+  }
+
+  /// Chaîne de nettoyage complète (ids, tags, bruit terminal) puis découpe en
+  /// segments. Isolée de [sanitizeFilename] pour pouvoir être rejouée sur une
+  /// variante du nom (voir le rétablissement d'un séparateur perdu).
+  ({List<String> parts, String normalized}) _splitIntoSegments(String withoutTrackNumber) {
+    String previous;
+
     // Retiré avant le nettoyage des tags entre parenthèses et avant le
     // découpage artiste/titre : un GUID contient lui-même des tirets qui
     // fausseraient sinon la détection du séparateur artiste/titre.
@@ -139,13 +297,25 @@ class FilenameSanitizer {
       withoutIdNoise = withoutIdNoise.replaceFirst(_emptyBracketPair, ' ');
     } while (withoutIdNoise != previous);
 
-    final String withoutNoise = TitleCleaner.stripNoiseTags(withoutIdNoise);
+    // Paroles recopiées après "(Lyrics)" : au moins 3 mots (en dessous, c'est
+    // plus probablement un vrai complément de titre) sont du bruit.
+    withoutIdNoise = withoutIdNoise.replaceAllMapped(_lyricsTail, (m) {
+      final int words = m.group(2)!.trim().split(_anyWhitespace).length;
+      return words >= 3 ? '${m.group(1)}${m.group(3)}' : m.group(0)!;
+    });
+
+    final String withoutNoise = TitleCleaner.stripNoiseTags(withoutIdNoise).replaceFirst(_dupSuffix, '');
+
+    // Mémorisé avant l'espacement des mots collés : sert à décider si un tiret
+    // sans espace est un mot composé ou un séparateur (voir
+    // [_splitOnTopLevelSeparator]).
+    final bool hadSpaces = withoutNoise.trim().contains(' ');
 
     // Espacement des mots collés fait tôt, *avant* le dépiècement de l'ID et
     // du bruit terminal nu : sans ça, un suffixe comme "EnglishLyrics" ne
     // révèle jamais son "Lyrics" isolable (pas d'espace/underscore devant),
     // et le bruit ne peut plus être reconnu ensuite.
-    final String spacedEarly = withoutNoise.replaceAllMapped(_camelCaseBoundary, (m) => ' ');
+    final String spacedEarly = _spaceGluedWords(withoutNoise);
 
     String withoutTrailingId = spacedEarly;
     do {
@@ -159,49 +329,71 @@ class FilenameSanitizer {
       withoutBareNoise = withoutBareNoise.replaceFirst(_bareTrailingNoise, '');
     } while (withoutBareNoise != previous);
 
-    final String normalized = withoutBareNoise.replaceAll('_', ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    final String normalized = _normalizedOf(withoutBareNoise);
 
-    final List<String> parts = _splitOnTopLevelSeparator(normalized).map(_denoiseSegment).toList();
+    List<String> parts = _splitOnTopLevelSeparator(normalized, hadSpaces).map(_denoiseSegment).toList();
 
-    if (parts.length == 2) {
-      // Un second segment qui ne fait que répéter (une partie de) l'artiste
-      // n'est pas un vrai titre — signe d'une réattribution redondante
-      // ajoutée par un convertisseur juste avant son id de téléchargement
-      // (ex. "...Sweet Dreams (Are Made Of This)-Eurythmics-<hash>" une fois
-      // le hash seul retiré : "Eurythmics" en second segment ne serait sinon
-      // pris à tort pour le titre, avec l'artiste ET le vrai titre restés
-      // collés côté "artiste"). Aucun faux positif plausible : un vrai titre
-      // identique à un simple sous-mot du nom d'artiste n'existe pas en
-      // pratique.
-      if (_normalizeForComparison(parts[1]).isNotEmpty &&
-          _normalizeForComparison(parts[0]).contains(_normalizeForComparison(parts[1]))) {
-        // parts[0] seul (sans le tag redondant) plutôt que la chaîne
-        // complète : le tag dupliqué n'apporte rien à afficher en révision.
-        return SanitizedFilename(artist: 'Unknown', title: restoreProtectedNames(parts[0]), requiresUserReview: true);
+    // Segments finaux qui ne font que répéter (une partie de) l'artiste : pas
+    // de vrais titres — signe d'une réattribution redondante ajoutée par un
+    // convertisseur juste avant son id de téléchargement (ex. "...Sweet Dreams
+    // (Are Made Of This)-Eurythmics-<hash>" une fois le hash seul retiré :
+    // "Eurythmics" en dernier segment serait sinon pris à tort pour le titre,
+    // avec l'artiste ET le vrai titre restés collés côté "artiste"). Aucun
+    // faux positif plausible : un vrai titre identique à un simple sous-mot du
+    // nom d'artiste n'existe pas en pratique. Appliqué en boucle : plusieurs
+    // réattributions peuvent s'empiler.
+    while (parts.length >= 2 &&
+        _normalizeForComparison(parts.last).isNotEmpty &&
+        _normalizeForComparison(parts.first).contains(_normalizeForComparison(parts.last))) {
+      parts = parts.sublist(0, parts.length - 1);
+    }
+
+    return (parts: parts, normalized: normalized);
+  }
+
+  static String _normalizedOf(String s) => s.replaceAll('_', ' ').replaceAll(_anyWhitespace, ' ').trim();
+
+  /// Insère un espace aux frontières de mots collés ([_camelCaseBoundary],
+  /// [_camelPronounI]). Un nom déjà bien espacé (au moins 1 espace pour 10
+  /// caractères) est laissé intact : le camelCase y est volontaire ("McDonald",
+  /// "DeLorean", "iPhone") et ne doit pas être éclaté.
+  static String _spaceGluedWords(String s) {
+    final String trimmed = s.trim();
+    final int spaces = ' '.allMatches(trimmed).length;
+    if (spaces * 10 >= trimmed.length) return s;
+    return s.replaceAllMapped(_camelPronounI, (m) => ' ').replaceAllMapped(_camelCaseBoundary, (m) => ' ');
+  }
+
+  /// Extrait la clause "feat./ft./featuring" du titre : renvoie (titre sans la
+  /// clause, invités). Inchangé si rien n'est trouvé ou si retirer la clause
+  /// viderait le titre.
+  (String, List<String>) _extractTitleFeat(String title) {
+    final Match? m = _titleFeat.firstMatch(title);
+    if (m == null) return (title, const []);
+    final String names = (m.group(1) ?? m.group(2) ?? m.group(3) ?? '').trim();
+    final List<String> feats = _splitArtists(names);
+    if (feats.isEmpty) return (title, const []);
+    final String rest =
+        '${title.substring(0, m.start)} ${title.substring(m.end)}'.replaceAll(_anyWhitespace, ' ').trim();
+    if (rest.isEmpty) return (title, const []);
+    return (rest, feats);
+  }
+
+  /// Remplace la première suite de >= 2 espaces ou " _ " située hors crochets
+  /// (et ni en tête ni en queue) par " - ". Renvoie null s'il n'y en a pas.
+  String? _replaceFirstWhitespaceRun(String s) {
+    int depth = 0;
+    for (int i = 0; i < s.length; i++) {
+      final String c = s[i];
+      if (c == '(' || c == '[' || c == '{') depth++;
+      if (c == ')' || c == ']' || c == '}') depth = depth > 0 ? depth - 1 : 0;
+      if (depth != 0) continue;
+      final Match? m = _whitespaceRun.matchAsPrefix(s, i);
+      if (m != null && i > 0 && m.end < s.length) {
+        return '${s.substring(0, i)} - ${s.substring(m.end)}';
       }
-      final List<String> artists = _splitArtists(parts[0]).map(restoreProtectedNames).toList();
-      return SanitizedFilename(
-        artist: artists.isNotEmpty ? artists.first : 'Unknown',
-        featuringArtists: artists.length > 1 ? artists.sublist(1) : const [],
-        title: restoreProtectedNames(parts[1]),
-        requiresUserReview: false,
-      );
     }
-
-    if (parts.length > 2) {
-      // Séparateurs multiples (ex. plusieurs "-") : ambigu, best-effort + review manuelle.
-      final List<String> artists = _splitArtists(parts.first).map(restoreProtectedNames).toList();
-      return SanitizedFilename(
-        artist: artists.isNotEmpty ? artists.first : 'Unknown',
-        featuringArtists: artists.length > 1 ? artists.sublist(1) : const [],
-        title: restoreProtectedNames(parts.sublist(1).join(' - ')),
-        requiresUserReview: true,
-      );
-    }
-
-    // Aucun séparateur trouvé : impossible de distinguer artiste/titre.
-    return SanitizedFilename(
-        artist: 'Unknown', title: restoreProtectedNames(_denoiseSegment(normalized)), requiresUserReview: true);
+    return null;
   }
 
   /// Retire les "??" et les mots de bruit isolés d'un segment. Si le nettoyage
@@ -216,6 +408,21 @@ class FilenameSanitizer {
     return cleaned.isEmpty ? segment : cleaned;
   }
 
+  /// Artistes d'un segment artiste : retire d'abord une clause "(Feat. X)"
+  /// ([_artistFeat]) — sinon la découpe sur `feat`/`&` laisserait des
+  /// parenthèses orphelines ("David Guetta (", "Akon)") — puis découpe le
+  /// reste ; les invités de la clause, découpés comme les autres, suivent
+  /// l'artiste principal. Inchangé si retirer la clause viderait le segment.
+  static List<String> _artistsOfSegment(String artistSegment) {
+    final Match? m = _artistFeat.firstMatch(artistSegment);
+    if (m == null) return _splitArtists(artistSegment);
+    final String rest = '${artistSegment.substring(0, m.start)} ${artistSegment.substring(m.end)}'
+        .replaceAll(_anyWhitespace, ' ')
+        .trim();
+    if (rest.isEmpty) return _splitArtists(artistSegment);
+    return [..._splitArtists(rest), ..._splitArtists(m.group(1)!)];
+  }
+
   /// Sépare un segment "artiste" en artiste principal + featurings sur les
   /// séparateurs `,` `&` `x` `vs` `feat.` `ft.` — jamais appliqué au titre.
   static List<String> _splitArtists(String artistSegment) =>
@@ -226,9 +433,17 @@ class FilenameSanitizer {
   /// Official Lyric Video)" ou un tag "(WSHHExclusive-OfficialMusicVideo)"
   /// fait croire à un séparateur artiste/titre supplémentaire là où il n'y en
   /// a pas, et casse un découpage par ailleurs sans ambiguïté.
-  List<String> _splitOnTopLevelSeparator(String input) {
+  ///
+  /// Un tiret SANS espace de part et d'autre est ambigu : séparateur compact
+  /// ("21Savage-redrum") ou tiret de mot composé ("après-midi"). Il est traité
+  /// comme un mot composé dans deux cas seulement : un vrai séparateur espacé
+  /// (" - ") existe ailleurs au premier niveau, ou le nom est espacé
+  /// ([hadSpaces]) et le tiret est entouré de deux minuscules. Sinon on coupe
+  /// comme avant, pour ne pas casser les noms compacts.
+  List<String> _splitOnTopLevelSeparator(String input, bool hadSpaces) {
     final List<String> parts = [];
     final StringBuffer current = StringBuffer();
+    final bool spacedDash = _hasTopLevelSpacedDash(input);
     int depth = 0;
     int i = 0;
     while (i < input.length) {
@@ -239,6 +454,15 @@ class FilenameSanitizer {
       if (depth == 0) {
         final Match? match = _separator.matchAsPrefix(input, i);
         if (match != null && match.start == i) {
+          if (match.end - match.start == 1) {
+            final bool lowerBefore = i > 0 && _lowerLetter.hasMatch(input[i - 1]);
+            final bool lowerAfter = i + 1 < input.length && _lowerLetter.hasMatch(input[i + 1]);
+            if (spacedDash || (hadSpaces && lowerBefore && lowerAfter)) {
+              current.write(char);
+              i++;
+              continue;
+            }
+          }
           parts.add(current.toString());
           current.clear();
           i = match.end;
@@ -250,6 +474,24 @@ class FilenameSanitizer {
     }
     parts.add(current.toString());
     return parts.map((part) => part.trim()).where((part) => part.isNotEmpty).toList();
+  }
+
+  /// Vrai si un tiret collé à une espace (d'un côté au moins) existe hors de
+  /// tout crochet : signe d'un vrai séparateur artiste/titre " - ".
+  static bool _hasTopLevelSpacedDash(String input) {
+    int depth = 0;
+    for (int i = 0; i < input.length; i++) {
+      final String c = input[i];
+      if (c == '(' || c == '[' || c == '{') depth++;
+      if (c == ')' || c == ']' || c == '}') depth = depth > 0 ? depth - 1 : 0;
+      if (depth != 0) continue;
+      if (_dashChar.hasMatch(c)) {
+        final bool spaceBefore = i > 0 && input[i - 1] == ' ';
+        final bool spaceAfter = i + 1 < input.length && input[i + 1] == ' ';
+        if (spaceBefore || spaceAfter) return true;
+      }
+    }
+    return false;
   }
 
   static String _normalizeForComparison(String value) => value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');

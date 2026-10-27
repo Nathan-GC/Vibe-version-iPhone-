@@ -137,16 +137,19 @@ void main() {
       expect(r.title, 'Strobe');
     });
 
-    test('flags for review instead of guessing when a redundant re-attribution tag remains after the hash is removed',
-        () {
+    test('drops a redundant re-attribution tag that remains after the hash is removed', () {
       // Cas réel : convention "Titre (tags)-NomChaîne-<hash>.mp3" — une fois
       // le hash seul retiré, "-Eurythmics" ne doit pas être pris pour un vrai
-      // titre puisqu'il ne fait que répéter le début de l'artiste.
+      // titre puisqu'il ne fait que répéter le début de l'artiste : le segment
+      // redondant est retiré et le vrai titre est retrouvé.
       final r = sanitizer.sanitizeFilename(
         'Eurythmics, Annie Lennox, Dave Stewart   Sweet Dreams (Are Made Of This) (Official Video)-Eurythmics-d0185932043d3000b48d310a26e5e8d2.mp3',
       );
       expect(r.title, isNot('Eurythmics'));
-      expect(r.requiresUserReview, isTrue);
+      expect(r.artist, 'Eurythmics');
+      expect(r.featuringArtists, ['Annie Lennox', 'Dave Stewart']);
+      expect(r.title, 'Sweet Dreams (Are Made Of This)');
+      expect(r.requiresUserReview, isFalse);
     });
   });
 
@@ -237,10 +240,11 @@ void main() {
       expect(r.title, 'Sugar On My Tongue');
     });
 
-    test('"by Tyler, The Creator" suffix is not split into two artists', () {
+    test('"by Tyler, The Creator" suffix is the artist, not split into two', () {
       final r = parse('GONE, GONE  THANK YOU by Tyler, The Creator lyrics_1750283457001.mp3');
+      expect(r.artist, 'Tyler, The Creator');
       expect(r.feat, isEmpty);
-      expect(r.title, contains('Tyler, The Creator'));
+      expect(r.title, 'GONE, GONE THANK YOU');
     });
 
     test('"Jay-Z" hyphen is not taken for the artist/title separator', () {
@@ -259,7 +263,8 @@ void main() {
     test('"Ne-Yo" is kept whole among several featurings', () {
       final r = parse('Pitbull - Give Me Everything (Lyrics) Ft. Ne-Yo, Afrojack, Nayer_1717096919460.mp3');
       expect(r.artist, 'Pitbull');
-      expect(r.title, contains('Ne-Yo'));
+      expect(r.feat, ['Ne-Yo', 'Afrojack', 'Nayer']);
+      expect(r.title, 'Give Me Everything');
     });
 
     test('"Selena Gomez & The Scene" stays ONE artist', () {
@@ -324,7 +329,8 @@ void main() {
     test('removes the "Directed by" credit bracket', () {
       final r = sanitizer.sanitizeFilename('Eminem - Godzilla ft. Juice WRLD (Directed by Cole Bennett).m4a');
       expect(r.artist, 'Eminem');
-      expect(r.title, 'Godzilla ft. Juice WRLD');
+      expect(r.featuringArtists, ['Juice WRLD']);
+      expect(r.title, 'Godzilla');
       expect(title('Juice WRLD - Lucid Dreams (Directed by Cole Bennett).m4a'), 'Lucid Dreams');
     });
 
@@ -388,6 +394,176 @@ void main() {
       expect(title('ArcticMonkeys-505(Lyrics)_733.m4a'), '505');
       expect(title('Vivaldi-Summer,RV315_837.m4a'), 'Summer,RV315');
       expect(title('Some Artist - Lyricist Tiktoker.mp3'), 'Lyricist Tiktoker');
+    });
+  });
+
+  // Correctifs de découpage issus de la mesure sur un corpus réel : chaque test
+  // utilise des titres/artistes publics, jamais de vrais noms de fichiers.
+  group('split fixes (featuring in title, order, "by", credits, camelCase, hyphen, spaces)', () {
+    SanitizedFilename parse(String f) => sanitizer.sanitizeFilename(f);
+
+    test('moves a "(feat. X)" / "ft. X" / "feat. X" clause from the title to featuringArtists', () {
+      for (final name in [
+        'Eminem - Stan (feat. Dido).mp3',
+        'Eminem - Stan ft. Dido.mp3',
+        'Eminem - Stan [Feat Dido].mp3'
+      ]) {
+        final r = parse(name);
+        expect(r.artist, 'Eminem', reason: name);
+        expect(r.featuringArtists, ['Dido'], reason: name);
+        expect(r.title, 'Stan', reason: name);
+      }
+      final multi = parse('Calvin Harris - Summer feat. Rihanna & Sia.mp3');
+      expect(multi.featuringArtists, ['Rihanna', 'Sia']);
+      expect(multi.title, 'Summer');
+    });
+
+    test('splits a glued "Titleft.Guest" but never cuts a word containing "ft"', () {
+      final glued = parse('Eminem - Stanft.Dido.mp3');
+      expect(glued.artist, 'Eminem');
+      expect(glued.featuringArtists, ['Dido']);
+      expect(glued.title, 'Stan');
+      expect(parse('Eminem - Lose Yourself Aft.mp3').featuringArtists, isEmpty);
+      // feat collé après un chiffre dans le segment artiste.
+      final artistSide = parse('French79feat.Sarah - Some Song.mp3');
+      expect(artistSide.artist, 'French79');
+      expect(artistSide.featuringArtists, ['Sarah']);
+    });
+
+    test('does not strip a title made only of a feat clause', () {
+      expect(parse('Some Artist - feat. Someone.mp3').title, isNotEmpty);
+    });
+
+    test('a 🎵 name in "Title - Artist" order is swapped and loses its emoji', () {
+      final r = parse('Stan - Eminem (Lyrics) \u{1F3B5}.mp3');
+      expect(r.artist, 'Eminem');
+      expect(r.title, 'Stan');
+      expect(r.title, isNot(contains('\u{1F3B5}')));
+      // Sans l'emoji, l'ordre "Artiste - Titre" n'est jamais permuté.
+      expect(parse('Stan - Eminem.mp3').artist, 'Stan');
+    });
+
+    test('"Title by Artist" without separator is split, flagged for review', () {
+      final r = parse('Till I Collapse by Eminem.mp3');
+      expect(r.artist, 'Eminem');
+      expect(r.title, 'Till I Collapse');
+      expect(r.requiresUserReview, isTrue);
+      final lyrics = parse('Till I Collapse Lyrics by Eminem.mp3');
+      expect(lyrics.artist, 'Eminem');
+      expect(lyrics.title, 'Till I Collapse');
+    });
+
+    test('"Stand by Me" is not cut when an "Artist - Title" separator exists', () {
+      final r = parse('Ben E. King - Stand by Me.mp3');
+      expect(r.artist, 'Ben E. King');
+      expect(r.title, 'Stand by Me');
+      expect(r.requiresUserReview, isFalse);
+    });
+
+    test('"by" followed by a lone pronoun is the title itself, never an artist', () {
+      for (final name in ['Stand by Me.mp3', 'Stand By You.mp3']) {
+        final r = parse(name);
+        expect(r.artist, 'Unknown', reason: name);
+        expect(r.title, name.replaceAll('.mp3', ''), reason: name);
+        expect(r.requiresUserReview, isTrue, reason: name);
+      }
+    });
+
+    test('French / full-track clip mentions are removed from brackets', () {
+      for (final tag in ['Clip Officiel', 'Vidéo Officielle', 'Audio Officiel', 'Clip Vidéo', 'Full Track']) {
+        expect(parse('Eminem - Lose Yourself ($tag).mp3').title, 'Lose Yourself', reason: tag);
+      }
+    });
+
+    test('credit brackets (From, prod., Soundtrack) are dropped but "Product" is not', () {
+      expect(parse('Hans Zimmer - Time (From Inception).mp3').title, 'Time');
+      expect(parse('Hans Zimmer - Time (prod. Somebody).mp3').title, 'Time');
+      expect(parse('Hans Zimmer - Time (Inception Soundtrack).mp3').title, 'Time');
+      expect(parse('Hans Zimmer - Time (Product Edition).mp3').title, 'Time (Product Edition)');
+    });
+
+    test('lyrics copied after "(Lyrics)" are dropped, a real "(Lyrics) feat. X" is kept', () {
+      expect(parse('Eminem - Lose Yourself (Lyrics) the lyrics of the song copied here.mp3').title, 'Lose Yourself');
+      final feat = parse('Eminem - Lose Yourself (Lyrics) feat. Dido.mp3');
+      expect(feat.title, 'Lose Yourself');
+      expect(feat.featuringArtists, ['Dido']);
+    });
+
+    test('a duplicate-download suffix "(1)" is removed', () {
+      expect(parse('Eminem - Lose Yourself (1).mp3').title, 'Lose Yourself');
+      expect(parse('Eminem - Lose Yourself (2) (1).mp3').title, 'Lose Yourself');
+    });
+
+    test('camelCase spacing handles Unicode letters and the pronoun "I"', () {
+      final accent = parse('ÉricClapton-WonderfulTonight.mp3');
+      expect(accent.artist, 'Éric Clapton');
+      expect(accent.title, 'Wonderful Tonight');
+      expect(parse('BeyoncéKnowles-HaloSong.mp3').artist, 'Beyoncé Knowles');
+      expect(parse('ArcticMonkeys-DoIWannaKnow.mp3').title, 'Do I Wanna Know');
+    });
+
+    test('camelCase spacing leaves an already well-spaced name untouched', () {
+      final r = parse('McDonald and Sons - Song.mp3');
+      expect(r.artist, 'McDonald and Sons');
+    });
+
+    test('a hyphen inside a word is ignored when a spaced separator exists', () {
+      final r = parse('Jean-Jacques Goldman - Après-midi.mp3');
+      expect(r.artist, 'Jean-Jacques Goldman');
+      expect(r.title, 'Après-midi');
+      expect(r.requiresUserReview, isFalse);
+    });
+
+    test('a compact "Artist-title" hyphen still splits', () {
+      final r = parse('21Savage-redrum.mp3');
+      expect(r.artist, '21 Savage');
+      expect(r.title, 'redrum');
+    });
+
+    test('a separator turned into multiple spaces or " _ " is restored', () {
+      final spaces = parse('Eminem   Lose Yourself.mp3');
+      expect(spaces.artist, 'Eminem');
+      expect(spaces.title, 'Lose Yourself');
+      final underscore = parse('Eminem _ Lose Yourself.mp3');
+      expect(underscore.artist, 'Eminem');
+      expect(underscore.title, 'Lose Yourself');
+    });
+
+    test('trailing segments repeating the artist are dropped (redundant re-attribution)', () {
+      final r = parse('Eurythmics - Sweet Dreams - Eurythmics.mp3');
+      expect(r.artist, 'Eurythmics');
+      expect(r.title, 'Sweet Dreams');
+    });
+  });
+
+  group('feat clause in the artist segment', () {
+    List<String> names(String file) {
+      final r = sanitizer.sanitizeFilename(file);
+      return [r.artist, ...r.featuringArtists];
+    }
+
+    test('"(Feat. A & B)" with dot and space, swapped by the music-note emoji', () {
+      expect(names('Play Hard - David Guetta (Feat. Ne-Yo & Akon) (Lyrics) \u{1F3B5}.mp3'), [
+        'David Guetta',
+        'Ne-Yo',
+        'Akon',
+      ]);
+    });
+
+    test('glued "(Feat.Name)" with a dot', () {
+      expect(names("JustDance-LadyGaga(Feat.ColbyO'Donis)(Lyrics)\u{1F3B5}.mp3"), ['Lady Gaga', "ColbyO'Donis"]);
+    });
+
+    test('glued "(ftName)" without a dot', () {
+      expect(names('LMFAO(ftNataliaKills)-ChampagneShowers.mp3'), ['LMFAO', 'Natalia Kills']);
+    });
+
+    test('square brackets', () {
+      expect(names('Calvin Harris [ft. Rihanna] - We Found Love.mp3'), ['Calvin Harris', 'Rihanna']);
+    });
+
+    test('parentheses without feat in an artist name are left untouched', () {
+      expect(names('Sunset (Band) - Some Song.mp3'), ['Sunset (Band)']);
     });
   });
 }

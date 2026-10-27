@@ -20,6 +20,9 @@ class TitleCleaner {
   // convertisseur/réseau social ; le "+" optionnel autorise les listes type
   // "( + paroles letra)". Un crochet qui mêle bruit ET marqueur de version
   // ("hardstyle remix + SLOWED") n'est PAS capté ici : voir [stripNoiseTags].
+  // Les mentions françaises ("clip officiel", "vidéo officielle", "audio
+  // officiel", "clip vidéo") et "full track" sont du même bruit de
+  // téléchargeur : sans elles, "(Clip Officiel)" restait dans le titre.
   static final RegExp noiseTags = RegExp(
     r'[\(\[\{](?:\s*\+?\s*(?:official\s*)?('
     r'official|'
@@ -30,15 +33,21 @@ class TitleCleaner {
     r'remaster(ed)?(\s*\d{4})?|'
     r'explicit|clean|'
     r'radio\s*edit|album\s*version|single\s*version|'
-    r'deluxe(\s*edition)?|bonus\s*track|extended(\s*version)?'
+    r'deluxe(\s*edition)?|bonus\s*track|extended(\s*version)?|'
+    r'(?:clip|vid[eé]o|audio)\s*officiel(?:le)?|clip\s*vid[eé]o|full\s*track'
     r'))+\s*[\)\]\}]',
     caseSensitive: false,
   );
 
   // Un crochet qui COMMENCE par une mention de crédit/téléchargement est du
-  // bruit en entier, quel que soit ce qui suit (nom du réalisateur, lien...).
+  // bruit en entier, quel que soit ce qui suit (nom du réalisateur, lien...) :
+  // "Directed by", "Free Download", mais aussi "(From <film>)", "(prod. X)",
+  // "(réal. X)", "(Participation X)" et tout crochet qui contient le mot
+  // "Soundtrack". `(?![A-Za-z])` après le mot-clé : "(Fromage)" ou "(Product)"
+  // ne sont pas des crédits.
   static final RegExp _creditBracket = RegExp(
-    r'[\(\[\{]\s*(?:directed\s+by|free\s*download)\b[^\)\]\}]*[\)\]\}]',
+    r'[\(\[\{]\s*(?:directed\s+by|free\s*download|from|prod\.?|r[eé]al\.?|participation|[^\)\]\}]*\bsoundtrack\b)'
+    r'(?![A-Za-z])[^\)\]\}]*[\)\]\}]',
     caseSensitive: false,
   );
   static final RegExp _bracket = RegExp(r'[\(\[\{]([^\(\)\[\]\{\}]*)[\)\]\}]');
