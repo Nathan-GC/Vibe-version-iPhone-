@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/platform/app_platform.dart';
 import '../../../core/storage/scanner/full_device_scan_service.dart';
 import '../../library/data/documents_sync_controller.dart';
+import '../../library/data/library_rescan_service.dart';
 import '../../settings/data/auto_enrich_preference.dart';
 import '../data/onboarding_providers.dart';
 
@@ -81,6 +82,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     // dossier à l'ouverture, seulement depuis le bouton de la Bibliothèque.
     if (AppPlatform.isIOS) await DocumentsSyncController.disableAutomaticSync();
     await ref.read(onboardingStorageProvider).markCompleted();
+    // Installation neuve (bibliothèque vide) : rien à rescanner, les imports
+    // manuels suivants passent déjà par le pipeline courant.
+    await LibraryRescanService.markDone();
     if (mounted) context.go('/player');
   }
 

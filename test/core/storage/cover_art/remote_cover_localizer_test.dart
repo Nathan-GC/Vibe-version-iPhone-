@@ -98,7 +98,8 @@ void main() {
   }
 
   setUp(() async {
-    SharedPreferences.setMockInitialValues({'onboarding.full_scan_completed': true});
+    // Nouveau scan de la bibliothèque déjà fait : seule la garde RGPD est en jeu.
+    SharedPreferences.setMockInitialValues({'onboarding.full_scan_completed': true, 'library.rescan_done_version': 1});
     db = AppDatabase.forTesting(NativeDatabase.memory());
     repository = TrackRepository(db);
     root = await Directory.systemTemp.createTemp('remote_cover_test');
@@ -222,6 +223,7 @@ void main() {
     test('switch OFF: no request at all', () async {
       SharedPreferences.setMockInitialValues({
         'onboarding.full_scan_completed': true,
+        'library.rescan_done_version': 1,
         'privacy.auto_enrich_on_import': false,
       });
       await addTrack('t1', cover: 'https://example.com/1.jpg');
@@ -244,6 +246,24 @@ void main() {
     test('switch ON and onboarding finished: the pass goes through', () async {
       await addTrack('t1', cover: 'https://example.com/1.jpg');
 
+      expect(await buildWithRealGate().localizePending(), 1);
+    });
+
+    test('library rescan still pending: automatic passes download nothing, an explicit one still does', () async {
+      SharedPreferences.setMockInitialValues({'onboarding.full_scan_completed': true});
+      await addTrack('t1', cover: 'https://example.com/1.jpg');
+
+      expect(await buildWithRealGate().localizePending(), 0);
+      expect(adapter.requested, isEmpty);
+      expect(await coverOf('t1'), 'https://example.com/1.jpg');
+
+      // Pas de garde sur l'action explicite (éditeur).
+      expect(await buildWithRealGate().localizeTrack('t1'), isTrue);
+
+      // Scan terminé : la passe automatique reprend son cours.
+      SharedPreferences.setMockInitialValues(
+          {'onboarding.full_scan_completed': true, 'library.rescan_done_version': 1});
+      await addTrack('t2', cover: 'https://example.com/2.jpg');
       expect(await buildWithRealGate().localizePending(), 1);
     });
 
@@ -270,11 +290,18 @@ void main() {
       addTearDown(trigger.dispose);
 
       // Valeur initiale (1) : ignorée, c'est la passe de démarrage qui s'en charge.
-      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
       expect(adapter.requested, isEmpty);
 
       await addTrack('t2', cover: 'https://example.com/2.jpg');
-      await Future<void>.delayed(const Duration(milliseconds: 400));
+      // Attente par scrutation plutôt qu'un délai fixe : sous la charge de la
+      // suite complète, flux Drift + anti-rebond + 2 téléchargements dépassaient
+      // parfois 400 ms.
+      final DateTime deadline = DateTime.now().add(const Duration(seconds: 5));
+      while ((adapter.requested.length < 2 || (await repository.trackIdsWithRemoteCover()).isNotEmpty) &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
 
       expect(adapter.requested, hasLength(2));
       expect(await repository.trackIdsWithRemoteCover(), isEmpty);

@@ -1,3 +1,6 @@
+import 'dart:io' show IOException;
+
+import 'package:dio/dio.dart' show DioException, DioExceptionType;
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../../networking/metadata_api_client/metadata_api_client.dart';
@@ -50,8 +53,15 @@ class TrackAutoEnricher implements TrackEnricher {
   // [_searchTitleFor]). Vérifié empiriquement : une requête du type "VALD
   // PANDEMONIUM RELOADED feat. VLADIMIR CAUCHEMAR & TODI3FOR" ne trouve rien,
   // alors que "VALD PANDEMONIUM RELOADED" seul trouve le morceau.
+  //
+  // Deux formes : le mot isolé (`\b`, « feat. », « ft », « featuring ») OU, pour
+  // les noms de fichier sans espace (« Stanft.Dido »), « ft. »/« feat. » collé à
+  // un caractère alphanumérique ou une parenthèse (lookbehind) ET suivi d'un
+  // point obligatoire — sans lui, « Daft Punk », « Left » ou « Feather »
+  // seraient tronqués. Le lookahead `(?=[\s\S])` exige au moins un caractère
+  // après le marqueur : une clause vide n'a rien à retirer.
   static final RegExp _trailingFeatureClauseForQuery = RegExp(
-    r'[\(\[]?\s*\b(?:feat\.?|ft\.?|featuring)\b.*$',
+    r'[\(\[]?\s*(?:\b(?:feat\.?|ft\.?|featuring)\b|(?<=[A-Za-z0-9\)\]])(?:ft|feat)\.)(?=[\s\S]).*$',
     caseSensitive: false,
   );
 
@@ -66,8 +76,8 @@ class TrackAutoEnricher implements TrackEnricher {
     caseSensitive: false,
   );
 
-  /// `true` si [fileName] mentionne explicitement une vidéo/un clip.
-  @visibleForTesting
+  /// `true` si [fileName] mentionne explicitement une vidéo/un clip (aussi
+  /// utilisé par le nouveau scan de la bibliothèque, voir LibraryRescanService).
   static bool mentionsVideo(String fileName) => _videoMention.hasMatch(fileName);
 
   static String _baseName(String path) => path.split(RegExp(r'[\\/]')).last;
@@ -115,21 +125,22 @@ class TrackAutoEnricher implements TrackEnricher {
     // API tant qu'une correction manuelle ne l'a pas réinitialisé.
     if (!await _trackRepository.shouldAttemptEnrichment(trackId)) return false;
 
-    final String artist = artists.isNotEmpty ? artists.first : '';
-
     // Durée du fichier (ffprobe) et nom de fichier d'origine : garde-fou de
     // durée de TrackMatchConfidence. Piste introuvable : aucun contrôle de durée.
     final track = await _trackRepository.findById(trackId);
     final int? localDurationMs = track == null ? null : track.durationSeconds * 1000;
     final bool skipDurationCheck = track != null && mentionsVideo(_baseName(track.filePath));
 
-    final List<OnlineTrackResult>? candidates = await _searchCandidates(
-      queryArtist: artist,
-      queryTitle: title,
+    final MatchLookup lookup = await lookupMatch(
+      title: title,
+      artists: artists,
+      localDurationMs: localDurationMs,
+      skipDurationCheck: skipDurationCheck,
       retryOnFailure: !singleAttempt,
     );
-    if (candidates == null) {
-      // Erreur réseau/API sur les DEUX catalogues : en mode normal, déjà
+    if (lookup.networkFailed) {
+      // Échec TRANSITOIRE (coupure, timeout, 5xx, blocage 403/429) sans qu'aucun
+      // catalogue ait répondu : en mode normal, déjà
       // retentée en interne par MetadataApiClient, donc ne compte pas comme une
       // tentative épuisée, sans quoi un simple blocage temporaire iTunes (403)
       // finirait par bannir des morceaux parfaitement enrichissables une fois
@@ -140,39 +151,105 @@ class TrackAutoEnricher implements TrackEnricher {
       return _fallbackOrFail(trackId, title, artists, attemptConsumed: singleAttempt);
     }
 
-    final OnlineTrackResult? primaryMatch = TrackMatchConfidence.pickBestMatch(
+    final EnrichmentMatch? match = lookup.match;
+    if (match == null) {
+      // Recherche aboutie sans correspondance fiable (ni directe, ni inversée,
+      // ni artiste/titre exploitable pour tenter l'inversion) : tentative comptée.
+      // Y compris quand les deux catalogues ont échoué sur des erreurs DÉFINITIVES
+      // (400/404, réponse illisible…, voir [lookupMatch]) : réessayer échouerait
+      // identiquement, donc l'échec consomme une tentative comme une absence de
+      // correspondance — le titre finit en revue manuelle au lieu de boucler.
+      return _fallbackOrFail(trackId, title, artists, attemptConsumed: true);
+    }
+
+    // Correspondance directe : jamais destructif pour Titre/Artiste. Inversée :
+    // confirmation externe assez forte pour les corriger (revérifiée en base).
+    final bool ok = match.swapped
+        ? await _trackRepository.correctReversedTitleArtist(trackId, match.result)
+        : await _trackRepository.enrichFromOnlineMetadata(trackId, match.result);
+    await _trackRepository.recordEnrichmentOutcome(trackId, success: ok, source: EnrichmentSource.itunes);
+    return ok;
+  }
+
+  /// Recherche iTunes (US + FR, voir [_searchCandidates]) puis décision
+  /// ([decide]) pour ([title], [artists]), SANS rien écrire en base ni toucher
+  /// au circuit-breaker : brique publique réutilisable par un futur « nouveau
+  /// scan de la bibliothèque » qui veut seulement savoir ce que l'enrichisseur
+  /// décidérait.
+  ///
+  /// Le résultat distingue un échec réseau TRANSITOIRE sans réponse d'aucun
+  /// catalogue ([MatchLookup.networkFailed], rien n'a pu être jugé, à retenter
+  /// plus tard) d'une recherche aboutie dont [MatchLookup.match] est
+  /// éventuellement `null` (aucune correspondance fiable, ou catalogues en
+  /// échec DÉFINITIF — erreur HTTP de requête, réponse illisible : inutile de
+  /// réessayer, voir [_searchCandidates]). [retryOnFailure] `false` : aucune reprise interne
+  /// de [MetadataApiClient] (voir `singleAttempt` d'[enrichTrack]).
+  Future<MatchLookup> lookupMatch({
+    required String title,
+    required List<String> artists,
+    int? localDurationMs,
+    bool skipDurationCheck = false,
+    bool retryOnFailure = true,
+  }) async {
+    final String artist = artists.isNotEmpty ? artists.first : '';
+    final _SearchOutcome search = await _searchCandidates(
+      queryArtist: artist,
+      queryTitle: title,
+      retryOnFailure: retryOnFailure,
+    );
+    final List<OnlineTrackResult>? candidates = search.candidates;
+    if (candidates == null) return MatchLookup.networkFailed(serverResponded: search.serverResponded);
+    return MatchLookup.completed(decide(
+      title: title,
+      artists: artists,
+      candidates: candidates,
+      localDurationMs: localDurationMs,
+      skipDurationCheck: skipDurationCheck,
+    ));
+  }
+
+  /// Décision PURE (ni réseau, ni base) : parmi [candidates], renvoie la
+  /// correspondance primaire (`swapped: false`) ; à défaut, si l'artiste est
+  /// connu (non vide, différent de `Unknown`) et le titre non vide, celle de
+  /// l'inversion Titre/Artiste testée localement sur les mêmes candidats
+  /// (`swapped: true`) ; sinon `null`.
+  ///
+  /// Inversion : le TITRE local joue le rôle d'artiste. Il est d'abord nettoyé
+  /// par [TrackMatchConfidence.artistTextForSwap] (« Lady Gaga(Feat.Colby
+  /// O'Donis) » devient « Lady Gaga », sinon le score d'artiste s'effondre),
+  /// mais la parité des mots-clés de version compare le titre d'ORIGINE au
+  /// titre du candidat — sans quoi « Ian Asher (Remix) » deviendrait « Desire »
+  /// (pickBestMatch ne contrôle que les mots-clés du titre inversé).
+  @visibleForTesting
+  static EnrichmentMatch? decide({
+    required String title,
+    required List<String> artists,
+    required List<OnlineTrackResult> candidates,
+    int? localDurationMs,
+    bool skipDurationCheck = false,
+  }) {
+    final OnlineTrackResult? primary = TrackMatchConfidence.pickBestMatch(
       localTitle: title,
       localArtists: artists,
       candidates: candidates,
       localDurationMs: localDurationMs,
       skipDurationCheck: skipDurationCheck,
     );
-    if (primaryMatch != null) {
-      final bool ok = await _trackRepository.enrichFromOnlineMetadata(trackId, primaryMatch);
-      await _trackRepository.recordEnrichmentOutcome(trackId, success: ok, source: EnrichmentSource.itunes);
-      return ok;
-    }
+    if (primary != null) return EnrichmentMatch(primary, swapped: false);
 
+    final String artist = artists.isNotEmpty ? artists.first : '';
     final bool hasBothFields = artist.isNotEmpty && artist != 'Unknown' && title.isNotEmpty;
-    if (!hasBothFields) {
-      return _fallbackOrFail(trackId, title, artists, attemptConsumed: true);
-    }
+    if (!hasBothFields) return null;
 
-    // Inversion Titre/Artiste testée en local, sur les mêmes candidats.
-    final OnlineTrackResult? swappedMatch = TrackMatchConfidence.pickBestMatch(
+    final OnlineTrackResult? swapped = TrackMatchConfidence.pickBestMatch(
       localTitle: artist,
-      localArtists: [title],
+      localArtists: [TrackMatchConfidence.artistTextForSwap(title)],
       candidates: candidates,
       localDurationMs: localDurationMs,
       skipDurationCheck: skipDurationCheck,
     );
-    if (swappedMatch == null) {
-      return _fallbackOrFail(trackId, title, artists, attemptConsumed: true);
-    }
-
-    final bool ok = await _trackRepository.correctReversedTitleArtist(trackId, swappedMatch);
-    await _trackRepository.recordEnrichmentOutcome(trackId, success: ok, source: EnrichmentSource.itunes);
-    return ok;
+    if (swapped == null || !TrackMatchConfidence.sameVersionKeywords(title, swapped.title)) return null;
+    return EnrichmentMatch(swapped, swapped: true);
   }
 
   /// iTunes n'a rien donné : repli MusicBrainz s'il est configuré. Une seule
@@ -210,7 +287,19 @@ class TrackAutoEnricher implements TrackEnricher {
   /// (mieux vaut une moitié de réponse que rien). `null` uniquement si TOUS
   /// ont échoué : l'appelant applique alors son traitement d'erreur réseau.
   /// Requête vide : aucun appel réseau, liste vide.
-  Future<List<OnlineTrackResult>?> _searchCandidates({
+  ///
+  /// Quand AUCUN catalogue n'a répondu, la nature des échecs tranche : au moins
+  /// un échec TRANSITOIRE (voir [_isTransientFailure]) → `null` (réessayer plus
+  /// tard a un sens) ; que des échecs DÉFINITIFS (400/404, réponse illisible…)
+  /// → liste vide, c'est-à-dire une recherche « aboutie sans correspondance » :
+  /// la renvoyer en `null` ferait réessayer éternellement une requête qui
+  /// échouera toujours (AN-19 : le nouveau scan de la bibliothèque restait
+  /// bloqué sur le même titre).
+  ///
+  /// [_SearchOutcome.serverResponded] (AN-30) précise un échec transitoire : au
+  /// moins un catalogue a-t-il reçu une réponse d'ERREUR du serveur (5xx, 403,
+  /// 429) ou n'y a-t-il eu aucune réponse (hors ligne, timeout) ?
+  Future<_SearchOutcome> _searchCandidates({
     required String queryArtist,
     required String queryTitle,
     required bool retryOnFailure,
@@ -224,14 +313,19 @@ class TrackAutoEnricher implements TrackEnricher {
       if (queryArtist.isNotEmpty && queryArtist != 'Unknown') queryArtist,
       _searchTitleFor(queryTitle),
     ].join(' ').trim());
-    if (query.isEmpty) return const [];
+    if (query.isEmpty) return (candidates: const <OnlineTrackResult>[], serverResponded: false);
 
-    final List<List<OnlineTrackResult>?> perCatalog = await Future.wait([
+    final List<_CatalogOutcome> outcomes = await Future.wait([
       for (final String country in _catalogCountries) _searchCatalog(query, country, retryOnFailure),
     ]);
-    if (perCatalog.every((results) => results == null)) return null;
+    if (outcomes.every((outcome) => outcome.results == null)) {
+      return (
+        candidates: outcomes.any((outcome) => outcome.transientFailure) ? null : const <OnlineTrackResult>[],
+        serverResponded: outcomes.any((outcome) => outcome.serverResponded),
+      );
+    }
 
-    return mergeCandidates(perCatalog);
+    return (candidates: mergeCandidates(outcomes.map((outcome) => outcome.results)), serverResponded: false);
   }
 
   /// Fusionne les résultats par catalogue (dans l'ordre fourni, un catalogue
@@ -249,19 +343,67 @@ class TrackAutoEnricher implements TrackEnricher {
     return merged;
   }
 
-  /// Une requête sur un catalogue ; une erreur devient `null` pour ne pas
-  /// faire échouer l'autre catalogue (voir [_searchCandidates]).
-  Future<List<OnlineTrackResult>?> _searchCatalog(String query, String country, bool retryOnFailure) async {
+  /// Une requête sur un catalogue ; une erreur ne fait jamais échouer l'autre
+  /// catalogue (voir [_searchCandidates]) : elle devient un résultat `null`
+  /// accompagné de sa nature (transitoire ou définitive).
+  Future<_CatalogOutcome> _searchCatalog(String query, String country, bool retryOnFailure) async {
     try {
-      return await _metadataApiClient.search(
+      final List<OnlineTrackResult> results = await _metadataApiClient.search(
         query,
         limit: candidateLimit,
         retryOnFailure: retryOnFailure,
         country: country,
       );
-    } catch (_) {
-      return null;
+      return (results: results, transientFailure: false, serverResponded: false);
+    } catch (error) {
+      return (
+        results: null,
+        transientFailure: _isTransientFailure(error),
+        serverResponded: _isServerResponseFailure(error),
+      );
     }
+  }
+
+  /// `true` si l'échec peut disparaître en réessayant plus tard : pas de
+  /// réponse du tout (coupure, timeouts, connexion refusée), erreur serveur
+  /// 5xx, ou blocage de débit iTunes (403 et 429). MÊME classification que
+  /// `MetadataApiClient._isTransient`/`_isRateLimited` (qui documente les
+  /// autres codes HTTP comme de vraies erreurs de requête), complétée des
+  /// erreurs d'entrée/sortie qu'un `DioExceptionType.unknown` peut envelopper.
+  ///
+  /// Tout le reste est DÉFINITIF : autre code HTTP (400, 404…), réponse
+  /// illisible (JSON invalide, structure inattendue), annulation, exception
+  /// inattendue. Réessayer ne changerait rien, et une erreur définitive
+  /// traitée comme transitoire bloquerait le nouveau scan à vie sur ce titre.
+  static bool _isTransientFailure(Object error) {
+    if (error is! DioException) return false;
+    switch (error.type) {
+      case DioExceptionType.connectionTimeout:
+      case DioExceptionType.sendTimeout:
+      case DioExceptionType.receiveTimeout:
+      case DioExceptionType.connectionError:
+        return true;
+      case DioExceptionType.badResponse:
+        final int? status = error.response?.statusCode;
+        return status != null && (status >= 500 || status == 403 || status == 429);
+      case DioExceptionType.unknown:
+        return error.error is IOException;
+      // transformTimeout : décodage local de la réponse trop long, pas un
+      // problème de réseau — définitif comme une réponse illisible.
+      case DioExceptionType.badCertificate:
+      case DioExceptionType.cancel:
+      case DioExceptionType.transformTimeout:
+        return false;
+    }
+  }
+
+  /// `true` si l'échec est une réponse d'ERREUR du serveur (5xx, 403, 429) :
+  /// le réseau fonctionne, c'est le service qui refuse ou qui est en panne. À
+  /// l'inverse d'une absence de réponse (coupure, mode avion, timeouts,
+  /// `IOException`), qui dit seulement que l'appareil est hors ligne (AN-30).
+  static bool _isServerResponseFailure(Object error) {
+    if (error is! DioException || error.type != DioExceptionType.badResponse) return false;
+    return _isTransientFailure(error);
   }
 
   static String _dedupKey(OnlineTrackResult result) => result.trackId != null
@@ -269,4 +411,50 @@ class TrackAutoEnricher implements TrackEnricher {
       : 'key:${result.title}|${result.artist}|${result.album ?? ''}'.toLowerCase();
 
   static String _searchTitleFor(String title) => title.replaceFirst(_trailingFeatureClauseForQuery, '').trim();
+}
+
+/// Correspondance retenue par [TrackAutoEnricher.decide] : le candidat iTunes
+/// et le sens dans lequel il a été validé ([swapped] : Titre/Artiste inversés
+/// par rapport au fichier local).
+class EnrichmentMatch {
+  const EnrichmentMatch(this.result, {required this.swapped});
+
+  final OnlineTrackResult result;
+  final bool swapped;
+}
+
+/// Issue de la requête sur UN catalogue : [results] (`null` si elle a échoué)
+/// et, dans ce cas, [transientFailure] (échec qui peut disparaître en
+/// réessayant, voir `TrackAutoEnricher._isTransientFailure`).
+/// [serverResponded] : cet échec est une réponse d'erreur du serveur (5xx, 403,
+/// 429), pas une absence de réponse.
+typedef _CatalogOutcome = ({List<OnlineTrackResult>? results, bool transientFailure, bool serverResponded});
+
+/// Issue de [TrackAutoEnricher._searchCandidates] : [candidates] (`null` =
+/// échec transitoire) et, dans ce cas, [serverResponded] (au moins un catalogue
+/// a reçu une réponse d'erreur du serveur).
+typedef _SearchOutcome = ({List<OnlineTrackResult>? candidates, bool serverResponded});
+
+/// Résultat de [TrackAutoEnricher.lookupMatch] : soit un échec réseau
+/// TRANSITOIRE sans aucun catalogue ayant répondu ([networkFailed], rien n'a pu
+/// être jugé, réessayer plus tard a un sens), soit une recherche aboutie dont
+/// [match] vaut `null` quand aucun candidat n'est fiable (y compris quand tous
+/// les catalogues ont échoué sur des erreurs DÉFINITIVES).
+///
+/// [serverResponded] (AN-30, significatif seulement si [networkFailed]) : vrai
+/// si au moins un catalogue a reçu une réponse d'erreur du serveur (5xx, 403,
+/// 429) ; faux si AUCUN n'a répondu (coupure, mode avion, timeouts). Le nouveau
+/// scan s'en sert pour ne compter comme « échec » que le premier cas : être
+/// hors ligne n'est la faute d'aucun titre.
+class MatchLookup {
+  const MatchLookup.networkFailed({required this.serverResponded})
+      : networkFailed = true,
+        match = null;
+  const MatchLookup.completed(this.match)
+      : networkFailed = false,
+        serverResponded = false;
+
+  final bool networkFailed;
+  final bool serverResponded;
+  final EnrichmentMatch? match;
 }

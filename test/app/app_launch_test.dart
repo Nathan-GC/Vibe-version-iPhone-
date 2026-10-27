@@ -10,6 +10,8 @@ import 'package:playlist_app/core/storage/metadata_extractor/embedded_cover_back
 import 'package:playlist_app/core/storage/scanner/documents_library_sync.dart';
 import 'package:playlist_app/core/storage/scanner/full_device_scan_service.dart';
 import 'package:playlist_app/features/library/data/documents_sync_controller.dart';
+import 'package:playlist_app/features/library/data/library_rescan_providers.dart';
+import 'package:playlist_app/features/library/data/library_rescan_service.dart';
 import 'package:playlist_app/features/settings/presentation/legal_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -50,11 +52,22 @@ class _FakeCoverBackfill implements EmbeddedCoverBackfill {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class _FakeRescan implements LibraryRescanService {
+  int runs = 0;
+
+  @override
+  Future<void> runIfPending() async => runs++;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 void main() {
   late List<String> permissionCalls;
   late _FakeNotifications notifications;
   late _FakeCoverTrigger coverTrigger;
   late _FakeCoverBackfill coverBackfill;
+  late _FakeRescan rescan;
 
   setUp(() {
     SharedPreferences.setMockInitialValues({
@@ -65,6 +78,7 @@ void main() {
     notifications = _FakeNotifications();
     coverTrigger = _FakeCoverTrigger();
     coverBackfill = _FakeCoverBackfill();
+    rescan = _FakeRescan();
   });
 
   Future<void> launch(WidgetTester tester) async {
@@ -82,6 +96,7 @@ void main() {
         documentsLibrarySyncProvider.overrideWithValue(_NoopSync()),
         remoteCoverAutoTriggerProvider.overrideWithValue(coverTrigger),
         embeddedCoverBackfillProvider.overrideWithValue(coverBackfill),
+        libraryRescanServiceProvider.overrideWithValue(rescan),
       ],
       child: const PlaylistApp(),
     ));
@@ -99,6 +114,8 @@ void main() {
     // relit lui-même onboarding terminé + interrupteur, voir son test).
     expect(coverTrigger.passes, 1);
     expect(coverBackfill.runs, 1);
+    // Nouveau scan des métadonnées (la garde RGPD et le drapeau sont dans le service, testés à part).
+    expect(rescan.runs, 1);
     expect(permissionCalls, isNot(contains('requestPermissions')));
   });
 

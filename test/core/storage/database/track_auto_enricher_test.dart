@@ -1,7 +1,8 @@
 import 'dart:async';
+import 'dart:io' show SocketException;
 
 import 'package:dio/dio.dart';
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:playlist_app/core/networking/metadata_api_client/metadata_api_client.dart';
@@ -70,10 +71,18 @@ class _SearchCall {
 /// possible par catalogue, et une "porte" optionnelle qui garde chaque requête
 /// en vol tant que le test ne la libère pas (preuve de simultanéité).
 class _CatalogMetadataApiClient extends MetadataApiClient {
-  _CatalogMetadataApiClient({this.byCountry = const {}, this.failingCountries = const {}, this.gated = false});
+  _CatalogMetadataApiClient({
+    this.byCountry = const {},
+    this.failingCountries = const {},
+    this.errors = const {},
+    this.gated = false,
+  });
 
   final Map<String, List<OnlineTrackResult>> byCountry;
   final Set<String> failingCountries;
+
+  /// Erreur précise levée par catalogue (prioritaire sur [failingCountries]).
+  final Map<String, Object> errors;
   final bool gated;
   final List<_SearchCall> calls = [];
   final Map<String, Completer<void>> gates = {};
@@ -88,12 +97,24 @@ class _CatalogMetadataApiClient extends MetadataApiClient {
   }) async {
     calls.add(_SearchCall(query, limit, country, retryOnFailure));
     if (gated) await gates.putIfAbsent(country!, Completer<void>.new).future;
+    final Object? error = errors[country];
+    if (error != null) throw error;
     if (failingCountries.contains(country)) {
       throw DioException(requestOptions: RequestOptions(path: ''), type: DioExceptionType.connectionError);
     }
     return byCountry[country] ?? const [];
   }
 }
+
+/// Erreur Dio « réponse HTTP avec ce code » (400, 429, 503...).
+DioException _httpError(int status) => DioException(
+      requestOptions: RequestOptions(path: ''),
+      type: DioExceptionType.badResponse,
+      response: Response<String>(requestOptions: RequestOptions(path: ''), statusCode: status),
+    );
+
+/// Erreur Dio sans réponse (coupure, timeout...).
+DioException _noResponse(DioExceptionType type) => DioException(requestOptions: RequestOptions(path: ''), type: type);
 
 void main() {
   late AppDatabase db;
@@ -170,10 +191,11 @@ void main() {
     OnlineTrackResult candidateOf(int durationMs) =>
         OnlineTrackResult(artist: 'Daft Punk', title: 'One More Time', album: 'Discovery', durationMs: durationMs);
 
-    test('uses the stored duration: a candidate 20 s away is rejected, 12 s away accepted', () async {
+    test('uses the stored duration: a candidate 45 s away is rejected (> 40 s, undecorated), 12 s away accepted',
+        () async {
       await insertTrack(id: 't1', title: 'One More Time', artists: ['Daft Punk']);
 
-      expect(await enrichWith(candidateOf(200000)), isFalse);
+      expect(await enrichWith(candidateOf(225000)), isFalse);
       expect(await enrichWith(candidateOf(192000)), isTrue);
     });
 
@@ -252,6 +274,38 @@ void main() {
     expect(track.artists, ['Beyoncé']);
     expect(track.album, 'I Am... Sasha Fierce');
     expect(track.requiresUserReview, isFalse);
+  });
+
+  test('E4: no inversion when the local title carries a version keyword the candidate lacks', () async {
+    // Cas réel : artiste « Desire », titre « Ian Asher (Remix) » — le candidat
+    // inversé « Desire » de Ian Asher n'est pas ce remix : rien n'est écrasé.
+    await insertTrack(id: 't1', title: 'Ian Asher (Remix)', artists: ['Desire']);
+    final enricher = TrackAutoEnricher(
+      metadataApiClient: _FakeMetadataApiClient(const [OnlineTrackResult(artist: 'Ian Asher', title: 'Desire')]),
+      trackRepository: repository,
+    );
+
+    final bool ok = await enricher.enrichTrack(trackId: 't1', title: 'Ian Asher (Remix)', artists: ['Desire']);
+
+    expect(ok, isFalse);
+    final track = await repository.findById('t1');
+    expect(track!.title, 'Ian Asher (Remix)');
+    expect(track.artists, ['Desire']);
+  });
+
+  test('E4 (témoin): the same inversion without the keyword is still applied', () async {
+    await insertTrack(id: 't1', title: 'Ian Asher', artists: ['Desire']);
+    final enricher = TrackAutoEnricher(
+      metadataApiClient: _FakeMetadataApiClient(const [OnlineTrackResult(artist: 'Ian Asher', title: 'Desire')]),
+      trackRepository: repository,
+    );
+
+    final bool ok = await enricher.enrichTrack(trackId: 't1', title: 'Ian Asher', artists: ['Desire']);
+
+    expect(ok, isTrue);
+    final track = await repository.findById('t1');
+    expect(track!.title, 'Desire');
+    expect(track.artists, ['Ian Asher']);
   });
 
   test('does not touch title/artist when only the primary (non-swapped) order matches', () async {
@@ -591,6 +645,33 @@ void main() {
       expect((await repository.findById('t1'))!.enrichmentAttempts, 1);
     });
 
+    test('AN-19: permanent failures on both catalogs consume an attempt like a missing match, even in normal mode',
+        () async {
+      await insertTrack(id: 't1', title: 'One More Time', artists: ['Daft Punk']);
+      final client = _CatalogMetadataApiClient(errors: {'US': _httpError(400), 'FR': _httpError(400)});
+      final enricher = TrackAutoEnricher(metadataApiClient: client, trackRepository: repository);
+
+      for (int i = 0; i < TrackRepository.maxEnrichmentAttempts; i++) {
+        expect(await enrich(enricher), isFalse);
+      }
+
+      final track = await repository.findById('t1');
+      expect(track!.enrichmentAttempts, TrackRepository.maxEnrichmentAttempts);
+      expect(track.enrichmentStatus, EnrichmentStatus.needsManualReview);
+    });
+
+    test('AN-19: a transient failure (429) on both catalogs still consumes nothing in normal mode', () async {
+      await insertTrack(id: 't1', title: 'One More Time', artists: ['Daft Punk']);
+      final client = _CatalogMetadataApiClient(errors: {'US': _httpError(429), 'FR': _httpError(429)});
+      final enricher = TrackAutoEnricher(metadataApiClient: client, trackRepository: repository);
+
+      expect(await enrich(enricher), isFalse);
+
+      final track = await repository.findById('t1');
+      expect(track!.enrichmentStatus, EnrichmentStatus.pending);
+      expect(track.enrichmentAttempts, 0);
+    });
+
     test('singleAttempt sends retryOnFailure: false on both requests, normal mode keeps retries', () async {
       await insertTrack(id: 't1', title: 'One More Time', artists: ['Daft Punk']);
       final single = _CatalogMetadataApiClient(byCountry: {
@@ -607,5 +688,319 @@ void main() {
       expect(normal.calls, hasLength(2));
       expect(normal.calls.map((c) => c.retryOnFailure), everyElement(isTrue));
     });
+  });
+
+  group('decide (décision pure, sans réseau ni base)', () {
+    test('returns the primary candidate (swapped: false)', () {
+      const hit = OnlineTrackResult(artist: 'Daft Punk', title: 'One More Time');
+      final match = TrackAutoEnricher.decide(
+        title: 'One More Time',
+        artists: const ['Daft Punk'],
+        candidates: const [OnlineTrackResult(artist: 'Autre', title: 'Autre chose'), hit],
+      );
+      expect(match, isNotNull);
+      expect(match!.swapped, isFalse);
+      expect(match.result, same(hit));
+    });
+
+    test('returns the reversed candidate (swapped: true) when only the swapped order matches', () {
+      const hit = OnlineTrackResult(artist: 'Beyoncé', title: 'Halo');
+      final match = TrackAutoEnricher.decide(
+        title: 'Beyoncé',
+        artists: const ['Halo'],
+        candidates: const [hit],
+      );
+      expect(match!.swapped, isTrue);
+      expect(match.result, same(hit));
+    });
+
+    test('returns null when nothing is reliable, and without trying the inversion when the artist is unknown', () {
+      expect(
+        TrackAutoEnricher.decide(
+          title: 'Feel Good',
+          artists: const ['Charlotte Cardin'],
+          candidates: const [OnlineTrackResult(artist: 'Charlotte Cardin', title: 'Confetti')],
+        ),
+        isNull,
+      );
+      // Artiste « Unknown » : pas d'inversion possible, même si le candidat colle en ordre inversé.
+      expect(
+        TrackAutoEnricher.decide(
+          title: 'Beyoncé',
+          artists: const ['Unknown'],
+          candidates: const [OnlineTrackResult(artist: 'Beyoncé', title: 'Halo')],
+        ),
+        isNull,
+      );
+      expect(TrackAutoEnricher.decide(title: 'Beyoncé', artists: const [], candidates: const []), isNull);
+    });
+
+    test('E4 stays active: no inversion when the local title carries a version keyword the candidate lacks', () {
+      expect(
+        TrackAutoEnricher.decide(
+          title: 'Ian Asher (Remix)',
+          artists: const ['Desire'],
+          candidates: const [OnlineTrackResult(artist: 'Ian Asher', title: 'Desire')],
+        ),
+        isNull,
+      );
+      expect(
+        TrackAutoEnricher.decide(
+          title: 'Ian Asher',
+          artists: const ['Desire'],
+          candidates: const [OnlineTrackResult(artist: 'Ian Asher', title: 'Desire')],
+        )?.swapped,
+        isTrue,
+      );
+    });
+
+    test('E6: the title playing the artist role is cleaned of its feat. clause for the inversion', () {
+      const hit = OnlineTrackResult(artist: 'Lady Gaga', title: "Just Dance (feat. Colby O'Donis)");
+      final match = TrackAutoEnricher.decide(
+        title: "Lady Gaga(Feat.Colby O'Donis)",
+        artists: const ['Just Dance'],
+        candidates: const [hit],
+      );
+      expect(match?.swapped, isTrue);
+      expect(match?.result, same(hit));
+    });
+
+    test('forwards the duration guard to both orders', () {
+      const hit = OnlineTrackResult(artist: 'Beyoncé', title: 'Halo', durationMs: 400000);
+      expect(
+        TrackAutoEnricher.decide(
+            title: 'Beyoncé', artists: const ['Halo'], candidates: const [hit], localDurationMs: 180000),
+        isNull,
+      );
+      expect(
+        TrackAutoEnricher.decide(
+            title: 'Beyoncé',
+            artists: const ['Halo'],
+            candidates: const [hit],
+            localDurationMs: 180000,
+            skipDurationCheck: true),
+        isNotNull,
+      );
+    });
+  });
+
+  group('lookupMatch', () {
+    test('both catalogs failing yields networkFailed (and no match)', () async {
+      final enricher = TrackAutoEnricher(
+        metadataApiClient: _CatalogMetadataApiClient(failingCountries: {'US', 'FR'}),
+        trackRepository: repository,
+      );
+
+      final lookup = await enricher.lookupMatch(title: 'One More Time', artists: const ['Daft Punk']);
+
+      expect(lookup.networkFailed, isTrue);
+      expect(lookup.match, isNull);
+    });
+
+    test('a completed search without reliable candidate is not a network failure', () async {
+      final enricher =
+          TrackAutoEnricher(metadataApiClient: _FakeMetadataApiClient(const []), trackRepository: repository);
+
+      final lookup = await enricher.lookupMatch(title: 'One More Time', artists: const ['Daft Punk']);
+
+      expect(lookup.networkFailed, isFalse);
+      expect(lookup.match, isNull);
+    });
+
+    Future<MatchLookup> lookupWith(_CatalogMetadataApiClient client) =>
+        TrackAutoEnricher(metadataApiClient: client, trackRepository: repository)
+            .lookupMatch(title: 'One More Time', artists: const ['Daft Punk']);
+
+    test('AN-19: both catalogs in permanent failure (HTTP 400) is a completed search without match', () async {
+      final lookup =
+          await lookupWith(_CatalogMetadataApiClient(errors: {'US': _httpError(400), 'FR': _httpError(400)}));
+
+      expect(lookup.networkFailed, isFalse);
+      expect(lookup.match, isNull);
+    });
+
+    test('AN-19: other permanent failures (404, unreadable response, unexpected exception) are not network failures',
+        () async {
+      for (final Object error in [
+        _httpError(404),
+        const FormatException('réponse illisible'),
+        StateError('inattendu'),
+        _noResponse(DioExceptionType.badCertificate),
+      ]) {
+        final lookup = await lookupWith(_CatalogMetadataApiClient(errors: {'US': error, 'FR': error}));
+
+        expect(lookup.networkFailed, isFalse, reason: '$error');
+        expect(lookup.match, isNull, reason: '$error');
+      }
+    });
+
+    test('AN-19: both catalogs offline or timing out is a network failure', () async {
+      for (final DioExceptionType type in [
+        DioExceptionType.connectionError,
+        DioExceptionType.connectionTimeout,
+        DioExceptionType.sendTimeout,
+        DioExceptionType.receiveTimeout,
+      ]) {
+        final lookup =
+            await lookupWith(_CatalogMetadataApiClient(errors: {'US': _noResponse(type), 'FR': _noResponse(type)}));
+
+        expect(lookup.networkFailed, isTrue, reason: '$type');
+      }
+    });
+
+    test('AN-19: 429, 403 (rate limit) and 5xx are transient: network failure', () async {
+      for (final int status in [429, 403, 500, 503]) {
+        final lookup =
+            await lookupWith(_CatalogMetadataApiClient(errors: {'US': _httpError(status), 'FR': _httpError(status)}));
+
+        expect(lookup.networkFailed, isTrue, reason: 'HTTP $status');
+      }
+    });
+
+    test('AN-19: a socket error wrapped in DioExceptionType.unknown is transient', () async {
+      final error = DioException(
+        requestOptions: RequestOptions(path: ''),
+        type: DioExceptionType.unknown,
+        error: const SocketException('Failed host lookup'),
+      );
+
+      final lookup = await lookupWith(_CatalogMetadataApiClient(errors: {'US': error, 'FR': error}));
+
+      expect(lookup.networkFailed, isTrue);
+    });
+
+    test('AN-19: one permanent (400) + one transient (timeout) failure stays a network failure', () async {
+      for (final errors in [
+        {'US': _httpError(400), 'FR': _noResponse(DioExceptionType.connectionTimeout)},
+        {'US': _noResponse(DioExceptionType.connectionTimeout), 'FR': _httpError(400)},
+      ]) {
+        final lookup = await lookupWith(_CatalogMetadataApiClient(errors: errors));
+
+        expect(lookup.networkFailed, isTrue);
+      }
+    });
+
+    test('AN-30: serverResponded is true for 5xx, 403 and 429', () async {
+      for (final int status in [429, 403, 500, 503]) {
+        final lookup =
+            await lookupWith(_CatalogMetadataApiClient(errors: {'US': _httpError(status), 'FR': _httpError(status)}));
+
+        expect(lookup.networkFailed, isTrue, reason: 'HTTP $status');
+        expect(lookup.serverResponded, isTrue, reason: 'HTTP $status');
+      }
+    });
+
+    test('AN-30: serverResponded is false for offline, timeouts and a wrapped IOException', () async {
+      final wrapped = DioException(
+        requestOptions: RequestOptions(path: ''),
+        type: DioExceptionType.unknown,
+        error: const SocketException('Failed host lookup'),
+      );
+      for (final Object error in [
+        _noResponse(DioExceptionType.connectionError),
+        _noResponse(DioExceptionType.connectionTimeout),
+        _noResponse(DioExceptionType.sendTimeout),
+        _noResponse(DioExceptionType.receiveTimeout),
+        wrapped,
+      ]) {
+        final lookup = await lookupWith(_CatalogMetadataApiClient(errors: {'US': error, 'FR': error}));
+
+        expect(lookup.networkFailed, isTrue, reason: '$error');
+        expect(lookup.serverResponded, isFalse, reason: '$error');
+      }
+    });
+
+    test('AN-30: serverResponded is true when one catalog answers 503 and the other is offline', () async {
+      for (final errors in [
+        {'US': _httpError(503), 'FR': _noResponse(DioExceptionType.connectionError)},
+        {'US': _noResponse(DioExceptionType.connectionError), 'FR': _httpError(503)},
+      ]) {
+        final lookup = await lookupWith(_CatalogMetadataApiClient(errors: errors));
+
+        expect(lookup.networkFailed, isTrue);
+        expect(lookup.serverResponded, isTrue);
+      }
+    });
+
+    test('AN-19: one catalog answering wins over the other one failing, whatever the failure', () async {
+      const hit = OnlineTrackResult(trackId: 2, artist: 'Daft Punk', title: 'One More Time', album: 'Discovery (FR)');
+      for (final Object error in [_httpError(400), _noResponse(DioExceptionType.connectionTimeout), _httpError(429)]) {
+        final lookup = await lookupWith(_CatalogMetadataApiClient(byCountry: {
+          'FR': [hit]
+        }, errors: {
+          'US': error
+        }));
+
+        expect(lookup.networkFailed, isFalse, reason: '$error');
+        expect(lookup.match?.result, same(hit), reason: '$error');
+      }
+    });
+
+    test('returns the decision without writing anything, and forwards retryOnFailure', () async {
+      await insertTrack(id: 't1', title: 'Beyoncé', artists: ['Halo']);
+      final client = _CatalogMetadataApiClient(byCountry: {
+        'FR': const [OnlineTrackResult(trackId: 5, artist: 'Beyoncé', title: 'Halo', album: 'I Am... Sasha Fierce')],
+      });
+      final enricher = TrackAutoEnricher(metadataApiClient: client, trackRepository: repository);
+
+      final lookup = await enricher.lookupMatch(title: 'Beyoncé', artists: const ['Halo'], retryOnFailure: false);
+
+      expect(lookup.networkFailed, isFalse);
+      expect(lookup.match?.swapped, isTrue);
+      expect(lookup.match?.result.title, 'Halo');
+      expect(client.calls.map((c) => c.retryOnFailure), everyElement(isFalse));
+      final track = await repository.findById('t1');
+      expect(track!.title, 'Beyoncé'); // lookupMatch n'écrit jamais en base.
+      expect(track.enrichmentAttempts, 0);
+    });
+  });
+
+  group('E5 : clause feat. collée dans la requête (le titre stocké ne change pas)', () {
+    Future<Set<String>> queriesFor(String title, String artist) async {
+      await insertTrack(id: 't1', title: title, artists: [artist]);
+      final client = _RecordingMetadataApiClient();
+      await TrackAutoEnricher(metadataApiClient: client, trackRepository: repository)
+          .enrichTrack(trackId: 't1', title: title, artists: [artist], singleAttempt: true);
+      return client.queries.toSet();
+    }
+
+    test('"Stanft.Dido" by Eminem is queried as "Eminem Stan"', () async {
+      expect(await queriesFor('Stanft.Dido', 'Eminem'), {'Eminem Stan'});
+      expect((await repository.findById('t1'))!.title, 'Stanft.Dido');
+    });
+
+    test('spaced and parenthesised clauses are still removed', () async {
+      expect(await queriesFor('Sorry (feat. Someone) ', 'Artist'), {'Artist Sorry'});
+    });
+
+    test('words merely containing "ft"/"feat" are left alone', () async {
+      expect(await queriesFor('Daft Punk - One More Time', 'Unknown'), {'Daft Punk - One More Time'});
+    });
+
+    test('Left and Feather are not truncated', () async {
+      expect(await queriesFor('Left Feather', 'Artist'), {'Artist Left Feather'});
+    });
+  });
+
+  test('E6: "Lady Gaga(Feat.Colby O\'Donis)" / "Just Dance" is corrected in the database', () async {
+    await insertTrack(id: 't1', title: "Lady Gaga(Feat.Colby O'Donis)", artists: ['Just Dance']);
+    final enricher = TrackAutoEnricher(
+      metadataApiClient: _FakeMetadataApiClient(const [
+        OnlineTrackResult(artist: 'Lady Gaga', title: "Just Dance (feat. Colby O'Donis)", album: 'The Fame'),
+      ]),
+      trackRepository: repository,
+    );
+
+    final bool ok = await enricher.enrichTrack(
+      trackId: 't1',
+      title: "Lady Gaga(Feat.Colby O'Donis)",
+      artists: ['Just Dance'],
+    );
+
+    expect(ok, isTrue);
+    final track = await repository.findById('t1');
+    expect(track!.title, "Just Dance (feat. Colby O'Donis)");
+    expect(track.artists, ['Lady Gaga']);
+    expect(track.album, 'The Fame');
   });
 }

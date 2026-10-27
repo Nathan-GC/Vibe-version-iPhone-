@@ -9,6 +9,7 @@ import '../core/shared/onboarding_storage.dart';
 import '../core/storage/cover_art/remote_cover_auto_trigger.dart';
 import '../core/storage/metadata_extractor/embedded_cover_backfill.dart';
 import '../core/theme/global_theme/global_theme.dart';
+import '../features/library/data/library_rescan_providers.dart';
 import '../core/theme/vibe_engine/active_vibe_provider.dart' show defaultVibeFor;
 import '../core/theme/vibe_engine/vibe_engine.dart';
 import '../features/library/data/documents_sync_controller.dart';
@@ -61,6 +62,11 @@ class _PlaylistAppState extends ConsumerState<PlaylistApp> {
         // sur OFF — relus par le localiseur à chaque passe). Le service reste
         // ensuite à l'écoute des nouvelles pochettes et de l'interrupteur.
         unawaited(ref.read(remoteCoverAutoTriggerProvider).runPass());
+        // Nouveau scan des métadonnées après une mise à jour (nouveau découpage
+        // des noms + correspondance iTunes sur TOUS les titres), une seule fois,
+        // reprenable. Même garde RGPD que ci-dessus, relue avant chaque titre ;
+        // ses pochettes sont rapatriées à sa fin.
+        unawaited(ref.read(libraryRescanServiceProvider).runIfPending());
         // Rattrapage des pochettes intégrées aux fichiers déjà importés (local, sans réseau).
         unawaited(ref.read(embeddedCoverBackfillProvider).runOnce());
       }

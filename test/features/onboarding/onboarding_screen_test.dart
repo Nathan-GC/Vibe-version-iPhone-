@@ -132,6 +132,8 @@ void main() {
     expect(_log, isNot(contains('scan')));
     expect(find.text('PLAYER'), findsOneWidget);
     expect((await prefs()).getBool('onboarding.full_scan_completed'), isTrue);
+    // Installation neuve : le nouveau scan post-mise-à-jour est marqué fait (rien à rescanner).
+    expect((await prefs()).getInt('library.rescan_done_version'), 1);
     // Interrupteur Paramètres > Confidentialité basculé sur OFF.
     expect((await prefs()).getBool('privacy.auto_enrich_on_import'), isFalse);
     // Android : aucune synchronisation de dossier à désactiver.
@@ -156,6 +158,8 @@ void main() {
     expect((await prefs()).getBool('privacy.auto_enrich_on_import'), isFalse);
     expect(find.text('PLAYER'), findsOneWidget);
     expect((await prefs()).getBool('onboarding.full_scan_completed'), isTrue);
+    // Installation neuve : le nouveau scan post-mise-à-jour est marqué fait (rien à rescanner).
+    expect((await prefs()).getInt('library.rescan_done_version'), 1);
   });
 
   testWidgets('step 5 "Activer" turns the Privacy switch on before the scan', (tester) async {
@@ -179,6 +183,8 @@ void main() {
     expect(find.textContaining('vous pourrez importer vos morceaux manuellement depuis Espace → Bibliothèque'),
         findsOneWidget);
     expect((await prefs()).getBool('onboarding.full_scan_completed'), isTrue);
+    // Installation neuve : le nouveau scan post-mise-à-jour est marqué fait (rien à rescanner).
+    expect((await prefs()).getInt('library.rescan_done_version'), 1);
     expect((await prefs()).getBool('privacy.auto_enrich_on_import'), isFalse);
   });
 

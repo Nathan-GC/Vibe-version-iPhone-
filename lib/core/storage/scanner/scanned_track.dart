@@ -49,4 +49,31 @@ class ScannedTrack {
   // sans pochette intégrée ou si l'extraction a échoué. TrackRepository ne
   // l'applique que si le titre n'a pas encore de pochette (sinon supprimée).
   final String? coverArtPath;
+
+  /// Même titre scanné, sous l'id effectivement écrit en base
+  /// ([TrackRepository.upsertTrack] peut attribuer un id de variante `<id>~N`
+  /// à un fichier dont l'identité est déjà portée par un autre fichier) : les
+  /// étapes suivantes (enrichissement, association à une playlist) doivent
+  /// viser la ligne réellement créée, pas l'id calculé à l'identité.
+  ScannedTrack withId(String newId) {
+    if (newId == id) return this;
+    return ScannedTrack(
+      id: newId,
+      title: title,
+      album: album,
+      primaryArtist: primaryArtist,
+      artists: artists,
+      filePath: filePath,
+      durationMs: durationMs,
+      requiresUserReview: requiresUserReview,
+      trimStartMs: trimStartMs,
+      trimEndMs: trimEndMs,
+      wasRenamedFromFilename: wasRenamedFromFilename,
+      genre: genre,
+      bpm: bpm,
+      lastModifiedEpochMs: lastModifiedEpochMs,
+      fileHash: fileHash,
+      coverArtPath: coverArtPath,
+    );
+  }
 }

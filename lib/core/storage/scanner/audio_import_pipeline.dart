@@ -66,23 +66,42 @@ class AudioImportPipeline {
   /// copie : [BlacklistedImportException]. Relance toute erreur, copie déjà
   /// nettoyée.
   ///
-  /// Titre déjà en base (même clé) : si son fichier existe encore, rien n'est
-  /// copié ni écrit ([AlreadyInLibraryImportException]) — un réimport ne doit
-  /// pas écraser l'édition manuelle ni re-pointer un fichier protégé vers une
-  /// copie supprimable. Si son fichier a disparu, la nouvelle copie ne
-  /// remplace que le lien vers le fichier ([TrackRepository.relinkFile]) et le
-  /// titre est renvoyé comme importé, sans `wasRenamedFromFilename` : il est
-  /// déjà enrichi ou édité, l'enrichissement auto ne doit pas le relancer.
+  /// Titre déjà en base (même clé) : si son fichier existe encore ET qu'il
+  /// s'agit du même enregistrement (écart de durée <= [sameRecordingTolerance]),
+  /// rien n'est copié ni écrit ([AlreadyInLibraryImportException]) — un
+  /// réimport ne doit pas écraser l'édition manuelle ni re-pointer un fichier
+  /// protégé vers une copie supprimable. Même clé mais durée différente : c'est
+  /// une AUTRE version (« Radio Edit » / original, « Slowed »…, la mention est
+  /// retirée par le nettoyage) — import normal ; [TrackRepository.upsertTrack]
+  /// lui donne un id de variante `<id>~N` et les deux titres apparaissent dans
+  /// « Doublons détectés ». Les versions déjà importées sont toutes
+  /// comparées : réimporter la version 2 ne crée pas une version 3.
+  /// Si le fichier du titre a disparu, la nouvelle copie ne remplace que le lien
+  /// vers le fichier ([TrackRepository.relinkFile]) et le titre est renvoyé
+  /// comme importé, sans `wasRenamedFromFilename` : il est déjà enrichi ou
+  /// édité, l'enrichissement auto ne doit pas le relancer.
+  ///
+  /// Le [ScannedTrack] renvoyé porte l'id EFFECTIF en base (possiblement un id
+  /// de variante), à utiliser pour la suite (enrichissement, association).
   Future<ScannedTrack?> importFile(File source) async {
     final ScannedTrack? identity = await _scanService.identify(source);
     if (identity == null) return null;
     final BlacklistedTrack? hidden = await _blacklist.findMatch(identity);
     if (hidden != null) throw BlacklistedImportException(hidden);
 
-    final Track? existing = await _trackRepository.findById(identity.id);
-    if (existing != null && await File(existing.filePath).exists()) {
-      throw AlreadyInLibraryImportException(existing);
+    final List<Track> versions = await _trackRepository.findVersionsOf(identity.id);
+    final List<Track> missing = [];
+    for (final Track version in versions) {
+      if (!await File(version.filePath).exists()) {
+        missing.add(version);
+      } else if (_isSameRecording(version, identity)) {
+        throw AlreadyInLibraryImportException(version);
+      }
     }
+    // Fichier disparu : relié de préférence à la version de même durée, sinon à
+    // la première (cas historique d'un titre unique).
+    final Track? existing =
+        missing.isEmpty ? null : missing.firstWhere((v) => _isSameRecording(v, identity), orElse: () => missing.first);
 
     final ImportedAudioFile imported = await _storageManager.importAudioFile(source);
     try {
@@ -108,8 +127,10 @@ class AudioImportPipeline {
           fileHash: track.fileHash,
         );
       }
-      await _trackRepository.upsertTrack(track);
-      return track;
+      // Id effectif : un fichier dont l'identité est déjà prise par une autre
+      // version reçoit un id de variante, `null` si la liste noire l'a refusé.
+      final String? savedId = await _trackRepository.upsertTrack(track);
+      return savedId == null ? track : track.withId(savedId);
     } catch (_) {
       await _discard(imported.file);
       rethrow;
@@ -132,6 +153,20 @@ class AudioImportPipeline {
           return present.existing.id;
         }
     }
+  }
+
+  /// Écart de durée toléré entre deux fichiers pour y voir le même
+  /// enregistrement : les durées lues varient de quelques secondes d'un
+  /// encodage ou d'un lecteur à l'autre, pas d'une version (radio edit, slowed,
+  /// sped up) à l'autre.
+  static const int sameRecordingTolerance = 5;
+
+  /// Même enregistrement ? Durée du fichier choisi inconnue (0) ou du titre en
+  /// base inconnue (0) : on ne peut pas distinguer, donc « même » — c'est le
+  /// choix prudent (AN-03, ne rien écraser, ne rien dupliquer).
+  bool _isSameRecording(Track existing, ScannedTrack picked) {
+    if (existing.durationSeconds == 0 || picked.durationMs == 0) return true;
+    return (existing.durationSeconds - picked.durationMs ~/ 1000).abs() <= sameRecordingTolerance;
   }
 
   Future<void> _discard(File copy) async {

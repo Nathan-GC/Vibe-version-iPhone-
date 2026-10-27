@@ -15,6 +15,7 @@ import '../../../core/storage/database/track_repository.dart';
 import '../../../core/storage/scanner/full_device_scan_service.dart';
 import '../../../core/storage/scanner/scanned_track.dart';
 import '../../library/data/library_providers.dart' show trackAutoEnricherProvider;
+import '../../library/data/library_rescan_service.dart';
 import '../../settings/data/auto_enrich_preference.dart';
 
 final Provider<FullDeviceScanService> fullDeviceScanServiceProvider = Provider<FullDeviceScanService>((ref) {
@@ -141,11 +142,17 @@ class OnboardingScanController extends Notifier<OnboardingScanState> {
       },
     );
 
+    // Id effectif de chaque titre : deux fichiers de même identité (versions,
+    // éditions, copies) reçoivent des ids distincts (`<id>~N`) et sont tous
+    // deux en base. Un titre refusé par la liste noire (`null`) est écarté de
+    // l'enrichissement : il n'a pas de ligne à enrichir.
+    final List<ScannedTrack> saved = [];
     for (final ScannedTrack track in tracks) {
-      await repository.upsertTrack(track);
+      final String? savedId = await repository.upsertTrack(track);
+      if (savedId != null) saved.add(track.withId(savedId));
     }
 
-    final List<ScannedTrack> renamedTracks = tracks.where((t) => t.wasRenamedFromFilename).toList();
+    final List<ScannedTrack> renamedTracks = saved.where((t) => t.wasRenamedFromFilename).toList();
     // Droit d'opposition (Paramètres) : désactivé, l'analyse reste hors-ligne.
     if (renamedTracks.isNotEmpty && await AutoEnrichPreference.isEnabled()) {
       final TrackAutoEnricher enricher = ref.read(trackAutoEnricherProvider);
@@ -169,6 +176,9 @@ class OnboardingScanController extends Notifier<OnboardingScanState> {
     }
 
     await ref.read(onboardingStorageProvider).markCompleted();
+    // Installation neuve : ses titres viennent d'être importés (et enrichis) par
+    // le pipeline courant, le nouveau scan post-mise-à-jour n'a rien à refaire.
+    await LibraryRescanService.markDone();
     // L'enrichissement vient d'écrire des URL de pochettes : rapatriées en
     // arrière-plan (sans retarder l'écran de fin), à condition que
     // l'interrupteur soit ON — vérifié par le localiseur.

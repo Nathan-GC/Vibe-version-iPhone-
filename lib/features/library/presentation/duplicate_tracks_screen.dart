@@ -100,11 +100,28 @@ class _DuplicateTrackRow extends ConsumerWidget {
           dense: true,
           leading: Icon(isPreviewingThis ? Icons.graphic_eq : Icons.music_note_outlined),
           title: Text(
-            '${track.album.isEmpty ? '(album inconnu)' : track.album} · $minutes:$seconds',
+            track.album.isEmpty ? '(album inconnu)' : track.album,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
-          subtitle: Text(track.filePath, maxLines: 2, overflow: TextOverflow.ellipsis),
+          // Durée en gras juste avant le chemin : deux versions d'un même titre
+          // (radio edit, slowed, édition d'album…) ont le même titre et le même
+          // artiste, seule leur durée les distingue d'un coup d'œil. Lue d'un
+          // bloc par les lecteurs d'écran, en toutes lettres.
+          subtitle: Semantics(
+            label: 'Durée $minutes minutes $seconds secondes, fichier ${track.filePath}',
+            excludeSemantics: true,
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(text: '$minutes:$seconds', style: const TextStyle(fontWeight: FontWeight.w600)),
+                  TextSpan(text: ' · ${track.filePath}'),
+                ],
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         ),
         Wrap(
           spacing: 4,

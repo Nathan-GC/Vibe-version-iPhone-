@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
 import '../../../features/library/data/library_providers.dart' show storageManagerServiceProvider;
+import '../../../features/library/data/library_rescan_service.dart';
 import '../../../features/settings/data/auto_enrich_preference.dart';
 import '../../networking/app_dio.dart';
 import '../../shared/onboarding_storage.dart';
@@ -49,10 +50,14 @@ class RemoteCoverLocalizer {
 
   /// Garde-fou RGPD des passes AUTOMATIQUES, relu avant chaque titre :
   /// onboarding terminé (aucun réseau avant) ET interrupteur ON (droit
-  /// d'opposition). Une action explicite ([localizeTrack] seul) n'y est pas
-  /// soumise.
+  /// d'opposition) ET nouveau scan de la bibliothèque terminé : tant qu'il est
+  /// en attente, les pochettes http(s) vont peut-être être remplacées, inutile
+  /// de les télécharger (une passe de rapatriement suit sa fin). Une action
+  /// explicite ([localizeTrack] seul, éditeur) n'y est pas soumise.
   static Future<bool> _defaultAutomaticGate() async =>
-      !await OnboardingStorage().isFirstLaunch() && await AutoEnrichPreference.isEnabled();
+      !await OnboardingStorage().isFirstLaunch() &&
+      await AutoEnrichPreference.isEnabled() &&
+      !await LibraryRescanService.isPending();
 
   /// Rapatrie la pochette de [trackId] si c'est une URL http(s). `true` si le
   /// titre pointe désormais vers un fichier local ; toute erreur donne

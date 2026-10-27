@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart' show OrderingTerm, Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -13,6 +13,7 @@ import 'package:playlist_app/core/storage/metadata_extractor/raw_track_metadata.
 import 'package:playlist_app/core/storage/scanner/audio_import_pipeline.dart';
 import 'package:playlist_app/core/storage/scanner/library_scan_service.dart';
 import 'package:playlist_app/core/storage/scanner/scanned_track.dart';
+import 'package:playlist_app/core/storage/silence_trimmer/silence_trimmer.dart';
 import 'package:playlist_app/core/storage/storage_manager/imported_audio_file.dart';
 import 'package:playlist_app/core/storage/storage_manager/storage_manager_service.dart';
 
@@ -46,6 +47,14 @@ class _FakeMetadataExtractor extends MetadataExtractor {
   }
 }
 
+/// Pas de FFmpeg hors device : quand la durée est connue, le scan lance le
+/// détecteur de silence (voir LibraryScanService._process).
+class _NoSilenceTrimmer extends SilenceTrimmerService {
+  @override
+  Future<TrimResult> detect(String filePath, {required int durationMs}) async =>
+      const TrimResult(trimStartMs: 0, trimEndMs: 0);
+}
+
 void main() {
   late Directory sourceDir;
   late Directory appFolder;
@@ -66,7 +75,7 @@ void main() {
   AudioImportPipeline pipeline(_FakeMetadataExtractor extractor, {BlacklistRepository? blacklist}) =>
       AudioImportPipeline(
         storageManager: _FakeStorageManager(appFolder),
-        scanService: LibraryScanService(metadataExtractor: extractor),
+        scanService: LibraryScanService(metadataExtractor: extractor, silenceTrimmer: _NoSilenceTrimmer()),
         trackRepository: TrackRepository(db),
         blacklistRepository: blacklist ?? BlacklistRepository(db),
       );
@@ -191,6 +200,89 @@ void main() {
       expect(appFolder.listSync(), hasLength(1));
       expect((await db.select(db.tracks).getSingle()).id, sourceKey);
       expect(await db.select(db.blacklistedTracks).get(), isEmpty);
+    });
+  });
+
+  group('AN-28 — same identity, different recording', () {
+    const String key = 'one-more-time__daft-punk';
+
+    /// Titre déjà en base : 320 s, fichier présent.
+    Future<File> seedPresent() async {
+      final File present = File(p.join(sourceDir.path, 'original.mp3'))..writeAsBytesSync([9]);
+      await TrackRepository(db).upsertTrack(ScannedTrack(
+        id: key,
+        title: 'One More Time',
+        album: '',
+        primaryArtist: 'Daft Punk',
+        artists: const ['Daft Punk'],
+        filePath: present.path,
+        durationMs: 320000,
+        requiresUserReview: false,
+        trimStartMs: 0,
+        trimEndMs: 0,
+      ));
+      return present;
+    }
+
+    test('duration within 2 s: same recording, still "already in the library"', () async {
+      await seedPresent();
+
+      await expectLater(
+        pipeline(_FakeMetadataExtractor(durationMs: 322000)).importFile(sourceFile()),
+        throwsA(isA<AlreadyInLibraryImportException>().having((e) => e.existing.id, 'existing', key)),
+      );
+
+      expect(appFolder.listSync(), isEmpty);
+      expect(await db.select(db.tracks).get(), hasLength(1));
+    });
+
+    test('duration 60 s apart: another version, imported under a variant id, the existing row untouched', () async {
+      final File present = await seedPresent();
+
+      final ScannedTrack? track = await pipeline(_FakeMetadataExtractor(durationMs: 260000)).importFile(sourceFile());
+
+      expect(track?.id, '$key~2', reason: 'l\'id effectif, pas l\'id calculé à l\'identité');
+      expect(appFolder.listSync(), hasLength(1));
+      final List<Track> rows = await (db.select(db.tracks)..orderBy([(t) => OrderingTerm(expression: t.id)])).get();
+      expect(rows.map((t) => (t.id, t.durationSeconds)), [(key, 320), ('$key~2', 260)]);
+      expect(rows.first.filePath, present.path);
+      expect(rows.last.filePath, appFolder.listSync().single.path);
+    });
+
+    test('re-importing that second version is recognised (no ~3 copy)', () async {
+      await seedPresent();
+      final AudioImportPipeline importer = pipeline(_FakeMetadataExtractor(durationMs: 260000));
+      await importer.importFile(sourceFile());
+
+      await expectLater(
+        importer.importFile(sourceFile()),
+        throwsA(isA<AlreadyInLibraryImportException>().having((e) => e.existing.id, 'existing', '$key~2')),
+      );
+
+      expect(appFolder.listSync(), hasLength(1), reason: 'la seconde tentative ne copie rien');
+      expect(await db.select(db.tracks).get(), hasLength(2));
+    });
+
+    test('file gone: relink is unchanged even when the duration differs', () async {
+      await TrackRepository(db).upsertTrack(ScannedTrack(
+        id: key,
+        title: 'One More Time',
+        album: '',
+        primaryArtist: 'Daft Punk',
+        artists: const ['Daft Punk'],
+        filePath: p.join(sourceDir.path, 'disparu.mp3'),
+        durationMs: 320000,
+        requiresUserReview: false,
+        trimStartMs: 0,
+        trimEndMs: 0,
+      ));
+
+      final ScannedTrack? track = await pipeline(_FakeMetadataExtractor(durationMs: 260000)).importFile(sourceFile());
+
+      expect(track?.id, key);
+      final Track saved = await db.select(db.tracks).getSingle();
+      expect(saved.id, key);
+      expect(saved.filePath, appFolder.listSync().single.path);
     });
   });
 

@@ -55,15 +55,21 @@ class DocumentsLibrarySync {
       },
     );
 
+    // Id effectif de chaque titre (voir TrackRepository.upsertTrack) : deux
+    // fichiers de même identité sont tous deux gardés sous des ids distincts
+    // (`<id>~N`, rangés dans « Doublons détectés ») ; un titre refusé par la
+    // liste noire (`null`) n'est ni compté ni enrichi.
+    final List<ScannedTrack> saved = [];
     for (final ScannedTrack track in tracks) {
-      await _repository.upsertTrack(track);
+      final String? savedId = await _repository.upsertTrack(track);
+      if (savedId != null) saved.add(track.withId(savedId));
     }
 
     int enriched = 0;
-    for (final ScannedTrack track in tracks.where((t) => t.wasRenamedFromFilename)) {
+    for (final ScannedTrack track in saved.where((t) => t.wasRenamedFromFilename)) {
       if (await _enrichRenamedTrack(track)) enriched++;
     }
 
-    return DocumentsSyncResult(added: tracks.length, enriched: enriched, skippedIncompleteDownloads: skipped);
+    return DocumentsSyncResult(added: saved.length, enriched: enriched, skippedIncompleteDownloads: skipped);
   }
 }

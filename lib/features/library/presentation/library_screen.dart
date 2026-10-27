@@ -25,6 +25,7 @@ import '../../settings/data/auto_enrich_preference.dart';
 import '../data/documents_sync_controller.dart';
 import '../data/library_enrichment_runner.dart';
 import '../data/library_providers.dart';
+import 'library_rescan_banner.dart';
 import 'metadata_editor_modal.dart';
 
 /// Bibliothèque locale : import manuel de MP3 depuis le stockage (copiés
@@ -369,6 +370,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         ),
         body: Column(
           children: [
+            // Nouveau scan des métadonnées après une mise à jour (invisible hors passe).
+            const LibraryRescanBanner(),
             // Zone d'importation : import des fichiers + fusion des artistes
             // (déplacée depuis les Réglages) — les doublons d'artistes
             // apparaissent justement après un import.

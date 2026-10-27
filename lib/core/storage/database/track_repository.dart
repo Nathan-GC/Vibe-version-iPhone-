@@ -185,10 +185,27 @@ class TrackRepository {
         ));
   }
 
-  Future<void> upsertTrack(ScannedTrack scanned) async {
+  /// Écrit [scanned] en base et renvoie l'id EFFECTIVEMENT utilisé — il peut
+  /// différer de `scanned.id` : les appelants doivent s'en servir pour la suite
+  /// (enrichissement, association à une playlist, titre renvoyé à l'écran).
+  ///
+  /// - `null` : rien n'a été inséré (titre en liste noire).
+  /// - `scanned.id` : cas courant (nouveau titre, mise à jour du même fichier,
+  ///   ou remplacement d'une ligne dont le fichier a disparu).
+  /// - `<id>~N` (N >= 2) : l'id calculé (titre + album + artiste principal) est
+  ///   déjà porté par un AUTRE fichier qui existe encore sur le disque — deux
+  ///   versions dont la mention (« Radio Edit », « Slowed »…) est retirée par
+  ///   le nettoyage, deux éditions, ou deux copies. Le second fichier reçoit
+  ///   le premier id de variante libre, de façon déterministe, au lieu
+  ///   d'écraser la ligne du premier : les deux titres coexistent et tombent
+  ///   dans « Doublons détectés », où l'utilisateur tranche.
+  /// - `previous.id` : le fichier était déjà indexé sous une autre clé que
+  ///   celle recalculée, laquelle appartient à un autre fichier — sa ligne est
+  ///   gardée telle quelle (voir plus bas).
+  Future<String?> upsertTrack(ScannedTrack scanned) async {
     if (await isBlacklisted(filePath: scanned.filePath, trackKey: scanned.id)) {
       await _deleteExtractedCover(scanned.coverArtPath);
-      return;
+      return null;
     }
 
     // Un même artiste peut apparaître plusieurs fois dans le nom de fichier
@@ -205,7 +222,7 @@ class TrackRepository {
       if (!artists.contains(name)) artists.add(name);
     }
 
-    return _db.transaction(() async {
+    return _db.transaction<String?>(() async {
       // Même fichier déjà indexé sous une autre clé (tags modifiés, ou clé
       // d'une version antérieure de buildSanitizedKey) : la ligne est
       // renommée en place, playlists comprises — sans quoi l'insertion
@@ -223,7 +240,7 @@ class TrackRepository {
           fileHash: Value(scanned.fileHash),
         ));
         await _deleteExtractedCover(scanned.coverArtPath);
-        return;
+        return previous.id;
       }
       if (previous != null && previous.id != scanned.id) {
         await (_db.update(_db.tracks)..where((t) => t.id.equals(previous.id)))
@@ -233,9 +250,21 @@ class TrackRepository {
         await (_db.delete(_db.trackArtists)..where((t) => t.trackId.equals(previous.id))).go();
       }
 
+      // Aucun titre n'est lié à CE chemin : si l'id calculé appartient déjà à un
+      // autre fichier encore présent, ce n'est pas une mise à jour mais une
+      // autre version — id de variante (voir la doc de la méthode). Fichier de
+      // la ligne existante disparu : c'est un remplacement, comportement
+      // historique (la ligne est réécrite sous le même id). Un titre déjà
+      // indexé sous ce chemin (`previous`) garde son id : c'est le même fichier.
+      String trackId = scanned.id;
+      if (previous == null) {
+        final Track? holder = await findById(scanned.id);
+        if (holder != null && _fileStillThere(holder.filePath)) trackId = await _firstFreeVariantId(scanned.id);
+      }
+
       await _db.into(_db.tracks).insertOnConflictUpdate(
             TracksCompanion.insert(
-              id: scanned.id,
+              id: trackId,
               title: scanned.title,
               album: scanned.album,
               artists: artists,
@@ -256,29 +285,71 @@ class TrackRepository {
             ),
           );
 
-      await applyExtractedCover(scanned.id, scanned.coverArtPath);
+      // Pochette, artistes et playlists suivent l'id EFFECTIF : sous l'id
+      // calculé, ils s'attacheraient à la ligne du premier fichier.
+      await applyExtractedCover(trackId, scanned.coverArtPath);
 
-      await (_db.delete(_db.trackArtists)..where((t) => t.trackId.equals(scanned.id))).go();
+      await (_db.delete(_db.trackArtists)..where((t) => t.trackId.equals(trackId))).go();
 
       if (artists.isNotEmpty) {
         await _db.batch((batch) {
           batch.insertAll(_db.trackArtists, [
             for (int i = 0; i < artists.length; i++)
-              TrackArtistsCompanion.insert(trackId: scanned.id, artistName: artists[i], position: i),
+              TrackArtistsCompanion.insert(trackId: trackId, artistName: artists[i], position: i),
           ]);
         });
       }
 
-      await _linkToAllImportedPlaylist(scanned.id);
+      await _linkToAllImportedPlaylist(trackId);
 
       // Dégrisage automatique : ce morceau peut être un titre attendu par
       // une playlist importée (JSON) — il y redevient lisible, à sa place.
       await MissingPlaylistTrackReconciler(_db).reconcileTrack(
-        trackId: scanned.id,
+        trackId: trackId,
         title: scanned.title,
         artists: artists,
       );
+      return trackId;
     });
+  }
+
+  /// Fichier d'un titre toujours sur le disque. Synchrone à dessein : appelé
+  /// seulement lors d'une collision d'id (rare), et sans l'indétermination
+  /// d'une E/S asynchrone sous horloge simulée dans les tests de widgets.
+  bool _fileStillThere(String filePath) {
+    try {
+      return File(filePath).existsSync();
+    } on FileSystemException {
+      return false;
+    }
+  }
+
+  /// Premier id de variante `<baseId>~N` (N >= 2) disponible : aucune ligne, ou
+  /// une ligne dont le fichier a disparu (remplacée, comme l'id de base).
+  /// Déterministe — le même ensemble de fichiers redonne les mêmes ids.
+  Future<String> _firstFreeVariantId(String baseId) async {
+    for (int n = 2;; n++) {
+      final String candidate = '$baseId~$n';
+      final Track? holder = await findById(candidate);
+      if (holder == null || !_fileStillThere(holder.filePath)) return candidate;
+    }
+  }
+
+  /// Titres portant l'identité [baseId] : la ligne d'id [baseId] puis ses
+  /// variantes `<baseId>~N` par N croissant. Sert à l'import manuel pour
+  /// reconnaître un enregistrement déjà présent parmi plusieurs versions.
+  Future<List<Track>> findVersionsOf(String baseId) async {
+    // `_` et `%` sont des jokers de LIKE et peuvent figurer dans un id : la
+    // requête peut ramener trop de lignes, l'expression régulière exacte
+    // ci-dessous fait foi.
+    final List<Track> rows =
+        await (_db.select(_db.tracks)..where((t) => t.id.equals(baseId) | t.id.like('$baseId~%'))).get();
+    final RegExp variant = RegExp('^${RegExp.escape(baseId)}~(\\d+)\$');
+    int rank(Track t) => t.id == baseId ? 1 : int.parse(variant.firstMatch(t.id)!.group(1)!);
+    return [
+      for (final Track t in rows)
+        if (t.id == baseId || variant.hasMatch(t.id)) t,
+    ]..sort((a, b) => rank(a).compareTo(rank(b)));
   }
 
   /// Lie [trackId] à la playlist système "Tous les titres importés", en la
@@ -542,10 +613,15 @@ class TrackRepository {
 
     final bool swapConfirmed = TrackMatchConfidence.isReliableMatch(
       localTitle: track.artists.isNotEmpty ? track.artists.first : '',
-      localArtists: [track.title],
+      // Même texte nettoyé que TrackAutoEnricher.decide (clause feat., bruit) :
+      // sans quoi « Lady Gaga(Feat.Colby O'Donis) » serait rejeté ici.
+      localArtists: [TrackMatchConfidence.artistTextForSwap(track.title)],
       candidate: match,
     );
     if (!swapConfirmed) return false;
+    // Même parité de version que dans TrackAutoEnricher : le titre local
+    // d'origine ("Ian Asher (Remix)") ne doit pas être écrasé par « Desire ».
+    if (!TrackMatchConfidence.sameVersionKeywords(track.title, match.title)) return false;
 
     final String correctedArtist = ArtistNameNormalizer.normalize(match.artist);
     final List<String> keywords = MusicKeywordEnricher.buildKeywords(
@@ -735,7 +811,8 @@ class TrackRepository {
 
   /// Filtre « pochette = URL http(s) » : ce sont les pochettes trouvées en
   /// ligne et pas encore rapatriées sur l'appareil (RemoteCoverLocalizer).
-  Expression<bool> _hasRemoteCover($TracksTable t) => t.coverArtPath.like('http://%') | t.coverArtPath.like('https://%');
+  Expression<bool> _hasRemoteCover($TracksTable t) =>
+      t.coverArtPath.like('http://%') | t.coverArtPath.like('https://%');
 
   /// Ids des titres dont la pochette est encore une URL http(s).
   Future<List<String>> trackIdsWithRemoteCover() async {
@@ -760,5 +837,113 @@ class TrackRepository {
           ..where((t) => t.id.equals(trackId) & t.coverArtPath.equals(remoteUrl)))
         .write(TracksCompanion(coverArtPath: Value(localPath)));
     return updated > 0;
+  }
+
+  /// « Nouveau scan de la bibliothèque » (voir LibraryRescanService) : réécrit
+  /// un titre déjà indexé comme le ferait un import neuf suivi d'un
+  /// enrichissement iTunes, à partir de l'identité relue sur le fichier
+  /// ([title], [artists], [album] et [genre] viennent de
+  /// `LibraryScanService.identify`) et de la correspondance fiable [match].
+  ///
+  /// - Titre/artistes : l'identité ; en [swapped] (Titre/Artiste inversés dans
+  ///   le fichier), les champs propres d'iTunes. `track_artists` est
+  ///   resynchronisé dans la même transaction.
+  /// - Album : celui des tags du fichier s'il existe (source la plus fiable),
+  ///   sinon celui d'iTunes, sinon l'ancien. Année et numéros de piste/disque/
+  ///   total : ceux d'iTunes quand ils sont connus, sinon les anciens.
+  /// - Pochette : celle d'iTunes SEULEMENT si l'ancienne est vide ou encore une
+  ///   URL http(s) ; une pochette locale (choisie à la main, intégrée au
+  ///   fichier ou déjà rapatriée) est conservée.
+  /// - `tags` : repart de zéro (genre des tags du fichier + genre/époque/mood
+  ///   d'iTunes) — l'ancien genre pouvait venir d'une mauvaise correspondance.
+  ///   Seuls le scan, l'enrichissement et l'éditeur (dont les titres sont
+  ///   exclus du nouveau scan) écrivent `tags` : aucun tag manuel à préserver.
+  /// - Statut `enrichedAutoItunes`, tentatives à 0, plus « à renommer ».
+  ///
+  /// Ne touche jamais id, chemin, durée, silences, playlists, lectures/likes ni
+  /// date de création. Les titres grisés d'une playlist importée ne sont
+  /// dégrisés (comme à l'import) que si titre/artistes ont réellement changé.
+  /// `false` si le titre n'existe plus.
+  Future<bool> applyRescanResult(
+    String trackId, {
+    required String title,
+    required List<String> artists,
+    required OnlineTrackResult match,
+    required bool swapped,
+    String? album,
+    String? genre,
+  }) async {
+    final Track? track = await findById(trackId);
+    if (track == null) return false;
+
+    // Même dédoublonnage qu'à l'import (UNIQUE(track_id, artist_name)), ordre préservé.
+    final List<String> newArtists = [];
+    for (final String name in swapped ? [ArtistNameNormalizer.normalize(match.artist)] : artists) {
+      if (name.isNotEmpty && !newArtists.contains(name)) newArtists.add(name);
+    }
+    final List<String> finalArtists = newArtists.isEmpty ? track.artists : newArtists;
+    final String finalTitle = swapped ? match.title : title;
+
+    final String oldCover = track.coverArtPath;
+    final bool oldCoverReplaceable =
+        oldCover.isEmpty || oldCover.startsWith('http://') || oldCover.startsWith('https://');
+    final String? matchCover = match.coverArtUrl;
+    final String? matchAlbum = match.album;
+    // Un numéro/une année à 0 ou négatif est « inconnu » : jamais écrit par-dessus une valeur connue.
+    int? known(int? value) => (value != null && value > 0) ? value : null;
+    final int? year = known(match.releaseYear);
+    final int? trackNumber = known(match.trackNumber);
+    final int? discNumber = known(match.discNumber);
+    final int? trackCount = known(match.trackCount);
+
+    final List<String> keywords = MusicKeywordEnricher.buildKeywords(
+      genre: match.genre,
+      releaseYear: match.releaseYear,
+      existing: (genre != null && genre.trim().isNotEmpty) ? [genre] : const [],
+    );
+
+    await _db.transaction(() async {
+      await (_db.update(_db.tracks)..where((t) => t.id.equals(trackId))).write(
+        TracksCompanion(
+          title: Value(finalTitle),
+          artists: Value(finalArtists),
+          album: (album != null && album.isNotEmpty)
+              ? Value(album)
+              : (matchAlbum != null && matchAlbum.isNotEmpty)
+                  ? Value(matchAlbum)
+                  : const Value.absent(),
+          releaseYear: year == null ? const Value.absent() : Value(year),
+          trackNumber: trackNumber == null ? const Value.absent() : Value(trackNumber),
+          discNumber: discNumber == null ? const Value.absent() : Value(discNumber),
+          trackCount: trackCount == null ? const Value.absent() : Value(trackCount),
+          coverArtPath: (oldCoverReplaceable && matchCover != null && matchCover.isNotEmpty)
+              ? Value(matchCover)
+              : const Value.absent(),
+          tags: Value(keywords),
+          requiresUserReview: const Value(false),
+          enrichmentStatus: const Value(EnrichmentStatus.enrichedAutoItunes),
+          enrichmentAttempts: const Value(0),
+        ),
+      );
+
+      await (_db.delete(_db.trackArtists)..where((t) => t.trackId.equals(trackId))).go();
+      await _db.batch((batch) {
+        batch.insertAll(_db.trackArtists, [
+          for (int i = 0; i < finalArtists.length; i++)
+            TrackArtistsCompanion.insert(trackId: trackId, artistName: finalArtists[i], position: i),
+        ]);
+      });
+
+      final bool identityChanged =
+          finalTitle != track.title || finalArtists.join('\u0000') != track.artists.join('\u0000');
+      if (identityChanged) {
+        await MissingPlaylistTrackReconciler(_db).reconcileTrack(
+          trackId: trackId,
+          title: finalTitle,
+          artists: finalArtists,
+        );
+      }
+    });
+    return true;
   }
 }
