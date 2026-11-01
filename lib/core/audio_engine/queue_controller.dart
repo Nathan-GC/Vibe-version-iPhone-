@@ -33,13 +33,6 @@ class QueueController extends _$QueueController {
     _preShuffleOrder = _preShuffleOrder?.where((id) => !trackIds.contains(id)).toList();
   }
 
-  void reorder(int oldIndex, int newIndex) {
-    final List<String> updated = [...state];
-    final String item = updated.removeAt(oldIndex);
-    updated.insert(newIndex, item);
-    state = updated;
-  }
-
   /// Remplace intégralement la queue (chargement d'une playlist, restauration
   /// de session au lancement). Efface tout ordre pré-mélange mémorisé : une
   /// toute nouvelle queue n'a pas d'ordre "d'origine" à restaurer.

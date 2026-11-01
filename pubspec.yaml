@@ -124,6 +124,8 @@ flutter:
     - assets/shaders/vibe_particles.frag
     # Nébuleuse FBM du preset Space (voir FluidBackground._paintNebula).
     - assets/shaders/space_nebula.frag
+    # Turbulence de l'effet "Fluide" du Vibe Creator (voir FluidBackground).
+    - assets/shaders/fluid_turbulence.frag
 
   # fonts:
   #   - family: AppFont

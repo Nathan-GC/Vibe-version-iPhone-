@@ -6,8 +6,9 @@ import '../../../core/audio_engine/queue_controller.dart';
 import '../../../core/storage/database/app_database.dart';
 import '../widgets/waveform_indicator.dart';
 
-/// Page 2 du swipe horizontal (Tab 2) : queue réordonnable par drag-and-drop,
-/// tap-to-play, équaliseur 4 barres animé sur la piste en cours de lecture.
+/// Page 2 du swipe horizontal (Tab 2) : queue en lecture seule, dans l'ordre
+/// de la source (pas de drag-and-drop), tap-to-play, équaliseur 4 barres animé
+/// sur la piste en cours de lecture.
 class QueueScreen extends ConsumerStatefulWidget {
   const QueueScreen({super.key});
 
@@ -47,11 +48,9 @@ class _QueueScreenState extends ConsumerState<QueueScreen> {
             minThumbLength: 48,
             radius: const Radius.circular(4),
             thumbColor: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
-            child: ReorderableListView.builder(
-              scrollController: _scrollController,
+            child: ListView.builder(
+              controller: _scrollController,
               itemCount: data.length,
-              onReorderItem: (fromIndex, toIndex) =>
-                  ref.read(queueControllerProvider.notifier).reorder(fromIndex, toIndex),
               itemBuilder: (context, index) {
                 final Track track = data[index];
                 final bool isCurrent = player.currentTrack?.id == track.id;

@@ -442,12 +442,13 @@ class PlayerController extends _$PlayerController {
   /// la cible de façon synchrone depuis la dernière cible demandée, affiche
   /// aussitôt le morceau visé, et un seul chargement audio part une fois les
   /// appuis stabilisés ([skipDebounce]). "Précédent" depuis le premier titre
-  /// boucle sur le dernier (Lot 2.1) ; "Suivant" s'arrête au dernier.
+  /// boucle sur le dernier (Lot 2.1) et "Suivant" depuis le dernier revient au
+  /// premier, dans les trois modes (comme la fin de piste, Section 3.1).
   void _skip(int delta) {
     final List<Track>? tracks = ref.read(queueTracksProvider).value;
     if (tracks == null || tracks.isEmpty) return;
-    final int target = (delta < 0 && _targetIndex == 0) ? tracks.length - 1 : _targetIndex + delta;
-    if (target < 0 || target >= tracks.length) return;
+    // `%` de Dart reste positif : bouclage aux deux bouts, y compris depuis -1.
+    final int target = (_targetIndex + delta) % tracks.length;
 
     _targetIndex = target;
     state = state.copyWith(currentTrack: tracks[target]);

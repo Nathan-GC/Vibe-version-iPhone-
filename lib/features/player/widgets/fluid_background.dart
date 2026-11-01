@@ -37,6 +37,12 @@ const String kCyberpunkCityImage = 'assets/images/cyberpunk_city_1.png';
 /// par-dessus, qui ne gère plus que buée légère, pluie qui ruisselle et
 /// grésillement des néons au tempo — jamais de dégradé/halos procéduraux ni
 /// de transition (pas de flash, pas de changement d'image) pour ce preset.
+///
+/// Effet "Fluide" du Vibe Creator (`VibePreset.custom` +
+/// `VibeCustomEffect.fluid`) : turbulence bicolore plein écran rendue par
+/// assets/shaders/fluid_turbulence.frag (voir [fluidTurbulenceColors]). Les
+/// presets figés gardent les halos historiques (`_paintFluidBlobs`), qui
+/// servent aussi de repli tant que ce shader n'est pas prêt ou s'il échoue.
 class FluidBackground extends StatefulWidget {
   const FluidBackground({
     super.key,
@@ -67,6 +73,7 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
   // recompiler/redécoder à chaque ouverture du Player.
   static Future<ui.FragmentProgram>? _shaderProgramFuture;
   static Future<ui.FragmentProgram>? _nebulaProgramFuture;
+  static Future<ui.FragmentProgram>? _turbulenceProgramFuture;
   static Future<ui.Image>? _backdropImageFuture;
   static Future<ui.Image>? _dummySamplerImageFuture;
 
@@ -88,6 +95,10 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
   // qu'elle n'est pas prête (ou si elle échoue), `_paintNebula` retombe sur
   // un halo radial dessiné au Canvas, centré au même endroit.
   ui.FragmentShader? _nebulaShader;
+  // Turbulence de custom + fluid (assets/shaders/fluid_turbulence.frag) —
+  // même schéma que la nébuleuse : chargée seulement si cette Vibe est
+  // affichée, halos historiques en attendant ou en cas d'échec.
+  ui.FragmentShader? _turbulenceShader;
   // Clé du CustomPaint lui-même : référence de coordonnées pour convertir la
   // position de la pochette (voir _coverCenterInCanvas).
   final GlobalKey _paintKey = GlobalKey();
@@ -112,6 +123,7 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
     _loadDummySamplerImage();
     if (widget.vibe.preset == VibePreset.neon) _loadBackdropImage();
     if (widget.vibe.preset == VibePreset.oled) _loadNebulaShader();
+    if (_isCustomFluid) _loadTurbulenceShader();
   }
 
   @override
@@ -120,6 +132,20 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
     if (oldWidget.coverArtPath != widget.coverArtPath) _maybeExtractPalette();
     if (widget.vibe.preset == VibePreset.neon && _backdropImage == null) _loadBackdropImage();
     if (widget.vibe.preset == VibePreset.oled && _nebulaShader == null) _loadNebulaShader();
+    if (_isCustomFluid && _turbulenceShader == null) _loadTurbulenceShader();
+  }
+
+  bool get _isCustomFluid => widget.vibe.preset == VibePreset.custom && widget.vibe.effect == VibeCustomEffect.fluid;
+
+  Future<void> _loadTurbulenceShader() async {
+    try {
+      _turbulenceProgramFuture ??= ui.FragmentProgram.fromAsset('assets/shaders/fluid_turbulence.frag');
+      final ui.FragmentProgram program = await _turbulenceProgramFuture!;
+      if (!mounted || _turbulenceShader != null) return;
+      setState(() => _turbulenceShader = program.fragmentShader());
+    } catch (_) {
+      // Dégradation silencieuse : halos historiques (voir _paintFluidBlobs).
+    }
   }
 
   Future<void> _loadNebulaShader() async {
@@ -281,6 +307,7 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
           key: _paintKey,
           painter: _FluidPainter(
             nebulaShader: isSpaceNebula ? _nebulaShader : null,
+            turbulenceShader: _isCustomFluid ? _turbulenceShader : null,
             coverCenterResolver: _coverCenterInCanvas,
             colors: colors,
             drift: _driftController.value,
@@ -356,9 +383,23 @@ Color _brighten(Color color, double gain) => Color.from(
       blue: (color.b * gain).clamp(0.0, 1.0),
     );
 
+/// Les 2 extrêmes de la turbulence custom + fluid : les deux premières
+/// couleurs de la Vibe. Une seule couleur, ou deux identiques (cas usuel :
+/// `normalizeVibeColors` duplique la dernière couleur pour l'interpolation),
+/// donnerait un aplat uni — la seconde devient alors une teinte nettement
+/// plus sombre de la première, pour que la turbulence reste lisible.
+@visibleForTesting
+(Color, Color) fluidTurbulenceColors(List<Color> colors) {
+  final Color first = colors.isEmpty ? Colors.black : colors.first;
+  if (colors.length >= 2 && colors[1] != first) return (first, colors[1]);
+  final HSLColor hsl = HSLColor.fromColor(first);
+  return (first, hsl.withLightness(hsl.lightness * 0.35).toColor());
+}
+
 class _FluidPainter extends CustomPainter {
   _FluidPainter({
     required this.nebulaShader,
+    required this.turbulenceShader,
     required this.coverCenterResolver,
     required this.colors,
     required this.drift,
@@ -416,6 +457,10 @@ class _FluidPainter extends CustomPainter {
   final ui.Image? dummySamplerImage;
   // Space uniquement — voir [_paintNebula].
   final ui.FragmentShader? nebulaShader;
+  // Non nul uniquement pour custom + fluid une fois le shader prêt — voir
+  // [_paintTurbulence] ; sinon (presets figés, chargement en cours ou
+  // échoué) [VibeCustomEffect.fluid] reste rendu par [_paintFluidBlobs].
+  final ui.FragmentShader? turbulenceShader;
   // Appelé pendant paint() (layout de la frame terminé) : centre réel de la
   // pochette dans ce canvas, ou `null` si elle n'est pas affichée.
   final Offset? Function() coverCenterResolver;
@@ -431,7 +476,12 @@ class _FluidPainter extends CustomPainter {
       } else {
         switch (effect) {
           case VibeCustomEffect.fluid:
-            _paintFluidBlobs(canvas, size);
+            final ui.FragmentShader? turbulence = turbulenceShader;
+            if (turbulence != null) {
+              _paintTurbulence(canvas, size, turbulence);
+            } else {
+              _paintFluidBlobs(canvas, size);
+            }
           case VibeCustomEffect.animatedGradient:
             _paintAnimatedGradient(canvas, size);
           case VibeCustomEffect.radiation:
@@ -467,8 +517,28 @@ class _FluidPainter extends CustomPainter {
     }
   }
 
-  // Rendu historique (Vibe Engine v2+, inchangé) : aplat de la première
-  // couleur puis halos flous qui dérivent en orbite, pulsant au beat.
+  // Custom + fluid : turbulence bicolore opaque plein écran, à la place des
+  // halos. Temps monotone (`shaderTime`) et non `drift`, qui reboucle à 1
+  // toutes les 18 s et ferait sauter l'écoulement.
+  void _paintTurbulence(Canvas canvas, Size size, ui.FragmentShader shader) {
+    if (size.isEmpty) return;
+    final (Color a, Color b) = fluidTurbulenceColors(colors);
+    shader
+      ..setFloat(0, size.width)
+      ..setFloat(1, size.height)
+      ..setFloat(2, shaderTime)
+      ..setFloat(3, a.r)
+      ..setFloat(4, a.g)
+      ..setFloat(5, a.b)
+      ..setFloat(6, b.r)
+      ..setFloat(7, b.g)
+      ..setFloat(8, b.b);
+    canvas.drawRect(Offset.zero & size, Paint()..shader = shader);
+  }
+
+  // Rendu historique (Vibe Engine v2+, inchangé) des presets figés, et repli
+  // de custom + fluid sans shader : aplat de la première couleur puis halos
+  // flous qui dérivent en orbite, pulsant au beat.
   void _paintFluidBlobs(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..color = colors.first);
 
@@ -633,6 +703,7 @@ class _FluidPainter extends CustomPainter {
         oldDelegate.beatPhase != beatPhase ||
         oldDelegate.colors != colors ||
         oldDelegate.shader != shader ||
+        oldDelegate.turbulenceShader != turbulenceShader ||
         oldDelegate.shaderTime != shaderTime ||
         oldDelegate.shaderStyle != shaderStyle ||
         oldDelegate.shaderAccentColor != shaderAccentColor ||

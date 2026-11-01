@@ -7,12 +7,14 @@ import 'package:playlist_app/core/storage/database/app_database.dart';
 import 'package:playlist_app/core/storage/database/database_provider.dart';
 import 'package:playlist_app/core/theme/vibe_engine/vibe_engine.dart';
 import 'package:playlist_app/features/playlists/presentation/vibe_customizer/vibe_customizer_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   late AppDatabase db;
 
   setUp(() async {
-    db = AppDatabase.forTesting(NativeDatabase.memory());
+    SharedPreferences.setMockInitialValues({});
+    db =AppDatabase.forTesting(NativeDatabase.memory());
     await db.into(db.playlists).insert(PlaylistsCompanion.insert(id: 'p', title: 'Test'));
   });
 
@@ -98,6 +100,35 @@ void main() {
 
     final Playlist saved = await savedPlaylist(tester);
     expect(saved.bgColors, ['FF00F0FF', 'FFFF3D68']);
+
+    await teardownTree(tester);
+  });
+
+  // Pastilles des nuanciers (32 px) ; les pastilles sélectionnées de l'ordre du
+  // dégradé font 36 px et sont donc exclues.
+  Finder swatches([Color? color]) => find.byWidgetPredicate((widget) {
+        if (widget is! Container || widget.constraints?.maxWidth != 32) return false;
+        final Decoration? decoration = widget.decoration;
+        return decoration is BoxDecoration && (color == null || decoration.color == color);
+      });
+
+  testWidgets('the fixed palette has 9 swatches in each of the two palettes', (tester) async {
+    await pumpScreen(tester);
+    expect(swatches(), findsNWidgets(18));
+    await teardownTree(tester);
+  });
+
+  testWidgets('a valid hex code is remembered in both palettes and survives a reopening', (tester) async {
+    await pumpScreen(tester);
+
+    await tester.enterText(find.byType(TextField).first, '#123456');
+    await tester.tap(find.text('Ajouter').first);
+    await settle(tester);
+    expect(swatches(const Color(0xFF123456)), findsNWidgets(2));
+
+    await teardownTree(tester);
+    await pumpScreen(tester);
+    expect(swatches(const Color(0xFF123456)), findsNWidgets(2));
 
     await teardownTree(tester);
   });

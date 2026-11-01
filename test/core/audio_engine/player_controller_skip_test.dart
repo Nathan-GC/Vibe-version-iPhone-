@@ -262,13 +262,16 @@ void main() {
     expect(audio.loaded, pathOf(3), reason: 'le chargement interrompu de t1 ne doit pas enchaîner sur t2');
   });
 
-  test('"Suivant" stops at the end of the queue, "Précédent" wraps from the first track to the last', () async {
+  test('"Suivant" wraps from the last track to the first, "Précédent" from the first to the last', () async {
     final PlayerController player = container.read(playerControllerProvider.notifier);
+    final int loadsBefore = audio.requested.length;
 
     unawaited(player.next());
     unawaited(player.next());
     await settle();
-    expect(currentId(), 't5', reason: 'déjà sur le dernier morceau');
+    expect(currentId(), 't1', reason: 't5 -> t0 (bouclage) -> t1');
+    expect(audio.loaded, pathOf(1));
+    expect(audio.requested.sublist(loadsBefore), [pathOf(1)], reason: 'un seul chargement après le zap');
 
     await player.playPlaylist('p', tracks, startIndex: 1);
     for (int i = 0; i < 4; i++) {
@@ -277,6 +280,18 @@ void main() {
     await settle();
     expect(currentId(), 't3', reason: 't1 -> t0 -> t5 (bouclage) -> t4 -> t3');
     expect(audio.loaded, pathOf(3));
+  });
+
+  test('in repeat-one mode, "Suivant" from the last track still goes to the first', () async {
+    final PlayerController player = container.read(playerControllerProvider.notifier);
+    await player.cycleRepeatMode();
+    await player.cycleRepeatMode();
+
+    unawaited(player.next());
+    await settle();
+
+    expect(currentId(), 't0');
+    expect(audio.loaded, pathOf(0));
   });
 
   group('"Précédent" (Lot 2.1)', () {

@@ -154,9 +154,11 @@ extension VibeParticleStyle on VibePreset {
 
 /// Effet visuel du fond animé pour `VibePreset.custom` (Vibe Creator, Section
 /// 4.2) — voir `FluidBackground`/`_FluidPainter` pour le rendu de chacun :
-///  - [fluid] : rendu historique (halos flous qui dérivent), aussi utilisé
-///    tel quel par tous les presets figés (`minimal`, `neon`, ...) qui
-///    n'exposent pas ce choix.
+///  - [fluid] : pour `custom`, turbulence de fluide bicolore texturée
+///    (shader assets/shaders/fluid_turbulence.frag, halos en repli). Valeur
+///    aussi portée par tous les presets figés (`minimal`, `neon`, ...) qui
+///    n'exposent pas ce choix : eux gardent le rendu historique (halos flous
+///    qui dérivent).
 ///  - [animatedGradient] : dégradé plein écran dont l'angle tourne en continu,
 ///    sans les halos flous du mode Fluide.
 ///  - [radiation] : rayons pulsés depuis le centre au rythme du BPM.

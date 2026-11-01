@@ -53,9 +53,9 @@ Future<void> playPlaylistAndNavigate(BuildContext context, WidgetRef ref, Playli
 ///    [playPlaylistAndNavigate]) ;
 ///  - appui long = SEUL accès à la vue détaillée ([onLongPress] : éditeur de
 ///    playlist, fiche artiste, feuille d'actions d'un morceau).
-/// Exception : les listes réordonnables (file d'attente, éditeur de
-/// playlist, carrousel de Mon espace — [onLongPress] null) où l'appui long
-/// reste réservé au glisser-déposer.
+/// Exception : les listes réordonnables (éditeur de playlist, carrousel de
+/// Mon espace — [onLongPress] null) où l'appui long reste réservé au
+/// glisser-déposer.
 ///
 /// Une seule zone tactile (un seul InkWell) : l'ancienne distinction
 /// pochette = lecture / titre = édition (Section 3.3) est abandonnée.

@@ -53,11 +53,45 @@ void main() {
     expect(find.text('Track 0'), findsOneWidget);
 
     // Poignée en haut à droite de la liste, glissée jusqu'en bas.
-    final Rect list = tester.getRect(find.byType(ReorderableListView));
+    final Rect list = tester.getRect(find.byType(RawScrollbar));
     await tester.dragFrom(Offset(list.right - 4, list.top + 20), Offset(0, list.height));
     await tester.pumpAndSettle();
 
     expect(find.text('Track 0'), findsNothing);
     expect(find.text('Track 499'), findsOneWidget);
+  });
+
+  testWidgets('the queue is read-only: a long-press drag never reorders it', (tester) async {
+    final List<Track> tracks = [for (int i = 0; i < 5; i++) _track(i)];
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        queueTracksProvider.overrideWith((ref) async => tracks),
+        playerControllerProvider.overrideWith(_IdlePlayerController.new),
+      ],
+      child: const MaterialApp(home: Scaffold(body: QueueScreen())),
+    ));
+    await tester.pumpAndSettle();
+
+    final ProviderContainer container = ProviderScope.containerOf(tester.element(find.byType(QueueScreen)));
+    // Écouteur explicite : la queue est auto-dispose et rien ne l'observe ici
+    // (queueTracksProvider est surchargé), son état repartirait sinon à vide.
+    final ProviderSubscription<List<String>> queue = container.listen(queueControllerProvider, (_, __) {});
+    addTearDown(queue.close);
+    final List<String> order = [for (final Track t in tracks) t.id];
+    container.read(queueControllerProvider.notifier).restore(order);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ReorderableListView), findsNothing);
+    expect(find.byType(ReorderableDragStartListener), findsNothing);
+    expect(find.byType(ReorderableDelayedDragStartListener), findsNothing);
+
+    // Appui long puis glissement vers le bas sur la première ligne.
+    final TestGesture gesture = await tester.startGesture(tester.getCenter(find.text('Track 0')));
+    await tester.pump(const Duration(seconds: 1));
+    await gesture.moveBy(const Offset(0, 200));
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    expect(container.read(queueControllerProvider), order);
   });
 }

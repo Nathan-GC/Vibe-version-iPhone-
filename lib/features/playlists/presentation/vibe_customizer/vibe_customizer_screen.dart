@@ -10,6 +10,7 @@ import '../../../../core/theme/vibe_engine/playlist_vibe_resolver.dart';
 import '../../../../core/theme/vibe_engine/vibe_engine.dart';
 import '../../../../core/theme/vibe_engine/vibe_haptic_service.dart';
 import '../../../library/data/library_providers.dart';
+import '../../data/custom_color_history.dart';
 import '../../data/playlist_providers.dart';
 
 /// Vibe Engine (Étape 5) : sélection du preset visuel (Layer B) d'une
@@ -112,31 +113,10 @@ class _CustomVibeEditor extends ConsumerStatefulWidget {
 }
 
 class _CustomVibeEditorState extends ConsumerState<_CustomVibeEditor> {
-  // Section 4.2 "Élargir le nuancier" — 10 teintes historiques + 10
-  // supplémentaires ; le code hexadécimal ci-dessous couvre de toute façon
-  // n'importe quelle couleur au-delà de ce nuancier.
-  static const List<Color> _swatchChoices = [
-    Color(0xFFFF3D68),
-    Color(0xFFFF8A00),
-    Color(0xFFFFE14D),
-    Color(0xFF6FCF97),
-    Color(0xFF219653),
-    Color(0xFF00F0FF),
-    Color(0xFF2F80ED),
-    Color(0xFF9B51E0),
-    Color(0xFFFF00E5),
-    Color(0xFFFFFFFF),
-    Color(0xFF000000),
-    Color(0xFF00BFA5),
-    Color(0xFFFF6E40),
-    Color(0xFFAEEA00),
-    Color(0xFFFF4081),
-    Color(0xFF40C4FF),
-    Color(0xFFFFD700),
-    Color(0xFF607D8B),
-    Color(0xFF795548),
-    Color(0xFFE0E0E0),
-  ];
+  // Nuancier fixe de 9 teintes (`kVibeSwatches`) suivi de l'historique des
+  // codes hexadécimaux déjà validés ; le code hexadécimal couvre de toute façon
+  // n'importe quelle autre couleur.
+  static const int _defaultGradientCyan = 4;
 
   late List<Color> _selectedColors;
   late Color _selectedAccentColor;
@@ -158,7 +138,7 @@ class _CustomVibeEditorState extends ConsumerState<_CustomVibeEditor> {
     // "Aucune couleur" : liste vide dans l'éditeur (stockée sous forme de
     // sentinelle transparente, voir `kNoVibeColor`).
     _selectedColors = widget.playlist.vibeStyle != VibePreset.custom
-        ? [_swatchChoices[0], _swatchChoices[5]]
+        ? [kVibeSwatches[0], kVibeSwatches[_defaultGradientCyan]]
         : (current.hasNoBackgroundColor ? <Color>[] : List.of(current.gradientColors));
     _selectedAccentColor = current.accentColor;
     _selectedEffect = current.effect;
@@ -189,6 +169,7 @@ class _CustomVibeEditorState extends ConsumerState<_CustomVibeEditor> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Code hexadécimal invalide')));
       return;
     }
+    ref.read(customColorHistoryProvider.notifier).add(color);
     _toggleColor(color);
     _gradientHexController.clear();
   }
@@ -199,6 +180,7 @@ class _CustomVibeEditorState extends ConsumerState<_CustomVibeEditor> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Code hexadécimal invalide')));
       return;
     }
+    ref.read(customColorHistoryProvider.notifier).add(color);
     setState(() => _selectedAccentColor = color);
     _accentHexController.clear();
   }
@@ -412,7 +394,7 @@ class _CustomVibeEditorState extends ConsumerState<_CustomVibeEditor> {
             Wrap(
               spacing: 10,
               runSpacing: 10,
-              children: _swatchChoices.map((color) {
+              children: [...kVibeSwatches, ...ref.watch(customColorHistoryProvider)].map((color) {
                 final bool selected = _selectedColors.contains(color);
                 return GestureDetector(
                   onTap: () => _toggleColor(color),
@@ -443,7 +425,7 @@ class _CustomVibeEditorState extends ConsumerState<_CustomVibeEditor> {
             Wrap(
               spacing: 10,
               runSpacing: 10,
-              children: _swatchChoices.map((color) {
+              children: [...kVibeSwatches, ...ref.watch(customColorHistoryProvider)].map((color) {
                 final bool selected = color == _selectedAccentColor;
                 return GestureDetector(
                   onTap: () => setState(() => _selectedAccentColor = color),
