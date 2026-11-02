@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:playlist_app/core/audio_analysis/bass_analysis_service.dart';
 
@@ -49,10 +50,60 @@ void main() {
     expect(commands.single, contains('-i "${audio.path}"'));
     expect(
       commands.single,
-      contains('-vn -ac 1 -af "aresample=8000,lowpass=f=150,asetnsamples=n=80:p=0,astats=metadata=1:reset=1,'
-          'ametadata=mode=print:key=lavfi.astats.Overall.RMS_level:file='),
+      contains('-vn -ac 1 -af "aresample=8000,lowpass=f=150,asetnsamples=n=80:p=0,astats='),
     );
+    expect(commands.single, contains(',ametadata=mode=print:key=lavfi.astats.Overall.RMS_level:file='));
     expect(commands.single, endsWith('-f null -'));
+  });
+
+  test('restricts astats to the overall RMS level (AN-01)', () async {
+    final List<String> commands = [];
+    await serviceWith(runnerWriting(metadata(['-20']), commands: commands)).analyze(audio.path);
+
+    final String astats = RegExp(r'astats=[^,]+').firstMatch(commands.single)!.group(0)!;
+    expect(astats, contains('measure_overall=RMS_level'));
+    expect(astats, contains('measure_perchannel=none'));
+    expect(astats, contains('metadata=1:reset=1'));
+  });
+
+  group('failure logging (AN-02)', () {
+    late List<String> logs;
+
+    setUp(() {
+      logs = [];
+      final DebugPrintCallback original = debugPrint;
+      debugPrint = (String? message, {int? wrapWidth}) {
+        if (message != null) logs.add(message);
+      };
+      addTearDown(() => debugPrint = original);
+    });
+
+    test('logs nothing on success', () async {
+      await serviceWith(runnerWriting(metadata(['-20']))).analyze(audio.path);
+      expect(logs, isEmpty);
+    });
+
+    test('logs a failing launcher with the basename only', () async {
+      await serviceWith(runnerWriting(metadata(['-20']), success: false)).analyze(audio.path);
+      expect(logs, hasLength(1));
+      expect(logs.single, contains('[BassAnalysis]'));
+      expect(logs.single, contains('song.mp3'));
+      expect(logs.single, isNot(contains(dir.path)));
+    });
+
+    test('logs an exception with its type and message', () async {
+      await serviceWith((String command) async => throw StateError('native channel down')).analyze(audio.path);
+      expect(logs, hasLength(1));
+      expect(logs.single, contains('[BassAnalysis]'));
+      expect(logs.single, contains('StateError'));
+      expect(logs.single, contains('native channel down'));
+    });
+
+    test('logs an empty output', () async {
+      await serviceWith(runnerWriting('')).analyze(audio.path);
+      expect(logs, hasLength(1));
+      expect(logs.single, contains('[BassAnalysis]'));
+    });
   });
 
   test('removes the temporary output file after a successful analysis', () async {

@@ -24,7 +24,7 @@ class LegalScreen extends StatelessWidget {
   /// Date des textes en vigueur, enregistrée comme version acceptée lors
   /// du consentement (OnboardingStorage.acceptLegal) — à changer à chaque
   /// modification des conditions ou de la politique de confidentialité.
-  static const String lastUpdated = '2 octobre 2026';
+  static const String lastUpdated = '2 novembre 2026';
 
   /// Titre du document à afficher déjà déplié, sinon tous sont repliés.
   final String? openDocument;
@@ -105,19 +105,20 @@ Vibe fonctionne localement. Il n'y a ni compte, ni publicité, ni outil de mesur
 2. Données conservées uniquement sur votre appareil
 • Votre bibliothèque : titres, artistes, albums, genres, pochettes, durées, emplacement des fichiers, nombre d'écoutes et date de dernière écoute.
 • Vos playlists, leurs réglages visuels et l'ordre des morceaux.
-• Vos préférences : thème, couleur, dernière file de lecture.
+• Vos préférences : thème, couleur, dernière file de lecture et les 8 derniers codes couleur saisis dans l'éditeur de Vibe.
 • La version des conditions d'utilisation et de la politique de confidentialité que vous avez acceptée au premier lancement.
 • Le nom d'auteur saisi lors d'un export de playlist (il est aussi inscrit dans le fichier exporté que vous partagez).
 • Les identifiants Spotify Developer (Client ID et Client Secret), si vous les saisissez, $_secureStorage.
-• Les copies des fichiers audio et des images que vous importez.
+• Les copies des fichiers audio et des images que vous importez, dont l'image de la Vibe « Behind the window » choisie dans votre galerie (une par playlist, dans le dossier de l'application ; remplacée quand vous en choisissez une autre, supprimée quand vous la retirez).
+• Le tempo estimé et le profil des basses de vos morceaux, calculés hors ligne sur l'appareil (FFmpeg) lorsque la Vibe « Behind the window » est affichée. Les couleurs de l'image importée sont analysées sur l'appareil, sans être enregistrées. Aucune de ces données n'est envoyée.
 
 3. Données transmises à des services tiers
 Seulement lorsque la fonction concernée est utilisée, Vibe envoie des requêtes à :
-• Apple (iTunes Search API) : titre et artiste des morceaux, ou votre recherche, pour compléter pochette, album, année et genre.
+• Apple (iTunes Search API) : titre et artiste des morceaux, ou votre recherche, pour compléter pochette, album, année et genre ; dans la recherche et la découverte, les images et extraits audio de 30 secondes que vous consultez sont chargés depuis les serveurs d'Apple.
 • MusicBrainz et Cover Art Archive (MetaBrainz Foundation) : titre et artiste, lorsque Apple ne trouve rien ou que vous choisissez cette source ; les requêtes identifient l'application (nom, version, contact de l'éditeur), jamais vous.
 • Spotify : le lien de la playlist importée et, si vous les avez saisis, vos identifiants Spotify Developer.
 Au premier lancement, Vibe vous demande si vous souhaitez importer automatiquement vos fichiers audio puis, si vous acceptez, les enrichir automatiquement ; si vous refusez l'import, l'enrichissement automatique est désactivé. Il s'applique ensuite après chaque import (Apple, puis MusicBrainz en repli) tant qu'il est activé dans Paramètres > Confidentialité ; désactivé, aucune connexion automatique n'est faite : l'import et l'affichage restent entièrement hors-ligne.
-Les pochettes trouvées sont téléchargées une seule fois depuis les serveurs d'Apple ou du Cover Art Archive, puis enregistrées sur votre appareil : leur affichage ne se connecte plus à internet. Comme pour toute connexion internet, votre adresse IP est visible par ces services lors du téléchargement, et ils la traitent selon leurs propres politiques :
+Les pochettes trouvées pour votre bibliothèque sont téléchargées une seule fois depuis les serveurs d'Apple ou du Cover Art Archive, puis enregistrées sur votre appareil : leur affichage ne se connecte plus à internet. En revanche, les images et extraits affichés dans la recherche, la découverte et la recherche de pochette de l'éditeur de métadonnées sont chargés au moment où vous les consultez. Comme pour toute connexion internet, votre adresse IP est alors visible par ces services, qui la traitent selon leurs propres politiques :
 Apple : apple.com/legal/privacy
 MetaBrainz (MusicBrainz, Cover Art Archive) : metabrainz.org/privacy
 Spotify : spotify.com/legal/privacy-policy
@@ -185,6 +186,6 @@ Les fichiers d'origine restés ailleurs sur l'appareil et les playlists exporté
         '''• Police Outfit : SIL Open Font License 1.1, intégrée à l'application (texte de la licence dans « Licences open source »).
 • Métadonnées : Apple iTunes Search API ; MusicBrainz (données principales CC0, genres issus des tags MusicBrainz sous licence CC BY-NC-SA 3.0, musicbrainz.org).
 • Pochettes : Apple ; Cover Art Archive (coverartarchive.org), chaque image restant la propriété de ses ayants droit.
-• Analyse des fichiers audio (silences, métadonnées) : FFmpeg (LGPL 3.0), via ffmpeg-kit.''',
+• Analyse des fichiers audio hors ligne (silences, métadonnées, basses, tempo estimé) : FFmpeg (ffmpeg.org), sous licence GNU LGPL 3.0, via la bibliothèque ffmpeg_kit_flutter_new_min, variante sans composant GPL. Le texte de la licence figure dans « Licences open source » ; les sources de FFmpeg sont disponibles sur ffmpeg.org/download.html et celles de la bibliothèque sur github.com/sk3llo/ffmpeg_kit_flutter.''',
       ),
     ];

@@ -1,7 +1,7 @@
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:ffmpeg_kit_flutter_new_min/ffmpeg_kit.dart';
+import 'package:flutter/foundation.dart';
 import 'package:ffmpeg_kit_flutter_new_min/return_code.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -28,10 +28,14 @@ class BassAnalysisService {
   final FfmpegRunner _runFfmpeg;
   final Future<Directory> Function() _temporaryDirectory;
 
+  void _log(String reason, String fileName) => debugPrint('[BassAnalysis] $reason ($fileName)');
+
   /// Null (sans exception) si le fichier est absent, si FFmpeg échoue ou ne
   /// produit rien : l'effet retombe alors sur la pulsation du tempo.
   Future<({Uint8List envelope, int? estimatedBpm})?> analyze(String filePath) async {
     if (!await File(filePath).exists()) return null;
+    // Basename seulement : le chemin complet peut contenir des données personnelles.
+    final String name = filePath.split(RegExp(r'[\\/]')).last;
 
     File? output;
     try {
@@ -41,18 +45,32 @@ class BassAnalysisService {
       // calcul reste léger. Fenêtres de 80 échantillons = 10 ms (100 Hz).
       // `ametadata` écrit dans un fichier plutôt que dans les logs : ~24 000
       // lignes pour 4 minutes passeraient une à une par le canal natif.
+      // `measure_overall`/`measure_perchannel` : seul RMS_level est lu, inutile
+      // de calculer le reste des statistiques (~4x plus rapide, sortie identique).
       final String command = '-hide_banner -nostats -i "$filePath" -vn -ac 1 '
-          '-af "aresample=8000,lowpass=f=150,asetnsamples=n=80:p=0,astats=metadata=1:reset=1,'
+          '-af "aresample=8000,lowpass=f=150,asetnsamples=n=80:p=0,'
+          'astats=metadata=1:reset=1:measure_overall=RMS_level:measure_perchannel=none,'
           'ametadata=mode=print:key=lavfi.astats.Overall.RMS_level:file=${output.path}" -f null -';
-      if (!await _runFfmpeg(command)) return null;
-      if (!await output.exists()) return null;
+      if (!await _runFfmpeg(command)) {
+        _log('FFmpeg a échoué', name);
+        return null;
+      }
+      if (!await output.exists()) {
+        _log('sortie absente', name);
+        return null;
+      }
 
       final List<double> levels = parseRmsLevelsDb(await output.readAsString());
-      if (levels.isEmpty) return null;
+      if (levels.isEmpty) {
+        _log('sortie vide ou illisible', name);
+        return null;
+      }
       return (envelope: bassEnvelopeFromDb(levels), estimatedBpm: estimateBpm(levels));
-    } catch (_) {
+    } catch (e) {
       // Le canal natif FFmpeg ou le disque peuvent échouer de façons variées :
       // l'analyse est facultative, jamais une raison de planter le lecteur.
+      // On journalise type et message, jamais le contenu du fichier.
+      _log('exception ${e.runtimeType}: $e', name);
       return null;
     } finally {
       try {
