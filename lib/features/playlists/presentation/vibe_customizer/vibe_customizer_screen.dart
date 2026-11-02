@@ -18,9 +18,13 @@ import '../../data/playlist_providers.dart';
 /// Inclut le Vibe Creator : palette de couleurs et image de fond sur mesure
 /// (`VibePreset.custom`).
 class VibeCustomizerScreen extends ConsumerWidget {
-  const VibeCustomizerScreen({super.key, required this.playlistId});
+  const VibeCustomizerScreen({super.key, required this.playlistId, this.pickWindowImage});
 
   final String playlistId;
+
+  /// Remplaçable en test (et par le portage iOS) : renvoie le chemin de l'image
+  /// choisie, null si le sélecteur est annulé. Par défaut, la galerie.
+  final Future<String?> Function()? pickWindowImage;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -83,6 +87,14 @@ class VibeCustomizerScreen extends ConsumerWidget {
                           onChanged: (value) =>
                               ref.read(playlistRepositoryProvider).updateShowCoverImage(playlistId, value),
                         ),
+                      // Image de la Vibe "Behind the window" : propre à ce
+                      // preset et à la playlist où il est actif.
+                      if (preset == VibePreset.neon && isSelected)
+                        _WindowImageControls(
+                          playlistId: playlistId,
+                          imagePath: data.windowBackgroundImagePath,
+                          pickImage: pickWindowImage ?? _pickWindowImageFromGallery,
+                        ),
                     ],
                   ),
                 );
@@ -94,6 +106,73 @@ class VibeCustomizerScreen extends ConsumerWidget {
         },
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => Center(child: Text('Erreur : $error')),
+      ),
+    );
+  }
+}
+
+/// Seul appel au sélecteur de galerie de l'image "Behind the window" (même
+/// appel que `_pickImage` de la Vibe personnalisée).
+Future<String?> _pickWindowImageFromGallery() async => (await pickGalleryImage())?.path;
+
+/// Supprime (au mieux) un fichier importé, uniquement s'il vit dans le dossier
+/// [folder] de l'app — jamais un fichier externe.
+Future<void> _deleteOwnedIn(String folder, String path) async {
+  if (path.isEmpty || !path.split(RegExp(r'[\\/]')).contains(folder)) return;
+  try {
+    final File file = File(path);
+    if (await file.exists()) await file.delete();
+  } on FileSystemException {
+    // Fichier verrouillé ou déjà supprimé : sans conséquence.
+  }
+}
+
+/// Boutons "Choisir / Changer l'image" et "Retirer" de la carte
+/// "Behind the window" active. Écrit uniquement `windowBackgroundImagePath` :
+/// l'image de la Vibe personnalisée n'est jamais touchée.
+class _WindowImageControls extends ConsumerWidget {
+  const _WindowImageControls({required this.playlistId, required this.imagePath, required this.pickImage});
+
+  final String playlistId;
+  final String imagePath;
+  final Future<String?> Function() pickImage;
+
+  Future<void> _choose(BuildContext context, WidgetRef ref) async {
+    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+    final String? picked = await pickImage();
+    // Sélecteur annulé : rien ne change.
+    if (picked == null) return;
+    try {
+      final File imported =
+          await ref.read(storageManagerServiceProvider).importWindowBackgroundImage(File(picked), playlistId);
+      await ref.read(playlistRepositoryProvider).updateWindowBackgroundImagePath(playlistId, imported.path);
+    } on Object {
+      // Copie impossible (disque plein, fichier disparu…) : la base garde
+      // l'ancienne image.
+      messenger.showSnackBar(const SnackBar(content: Text("Impossible d'importer l'image")));
+    }
+  }
+
+  Future<void> _remove(WidgetRef ref) async {
+    await ref.read(playlistRepositoryProvider).updateWindowBackgroundImagePath(playlistId, '');
+    // La base ne référence plus le fichier : on libère l'espace.
+    await _deleteOwnedIn('window_backgrounds', imagePath);
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: Wrap(
+        spacing: 8,
+        children: [
+          OutlinedButton.icon(
+            onPressed: () => _choose(context, ref),
+            icon: const Icon(Icons.image_outlined),
+            label: Text(imagePath.isEmpty ? "Choisir l'image" : "Changer l'image"),
+          ),
+          if (imagePath.isNotEmpty) TextButton(onPressed: () => _remove(ref), child: const Text('Retirer')),
+        ],
       ),
     );
   }
@@ -235,15 +314,7 @@ class _CustomVibeEditorState extends ConsumerState<_CustomVibeEditor> {
 
   /// Supprime (au mieux) un ancien fond, uniquement s'il vit dans le dossier
   /// `vibe_backgrounds` de l'app — jamais un fichier externe.
-  Future<void> _deleteOwnedBackground(String path) async {
-    if (path.isEmpty || !path.split(RegExp(r'[\\/]')).contains('vibe_backgrounds')) return;
-    try {
-      final File file = File(path);
-      if (await file.exists()) await file.delete();
-    } on FileSystemException {
-      // Fichier verrouillé ou déjà supprimé : sans conséquence.
-    }
-  }
+  Future<void> _deleteOwnedBackground(String path) => _deleteOwnedIn('vibe_backgrounds', path);
 
   Future<void> _save() async {
     VibeHapticService.triggerForPreset(VibePreset.custom, VibeInteraction.vibeSelect);

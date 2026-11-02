@@ -26,7 +26,7 @@ class StringListConverter extends TypeConverter<List<String>, String> {
   String toSql(List<String> value) => jsonEncode(value);
 }
 
-/// Mappe `playlists.vibe_style` ('minimal' | 'neon' | 'glassmorphism' | 'retro' | 'organic' | 'oled').
+/// Mappe `playlists.vibe_style` ('minimal' | 'neon' (Behind the window) | 'glassmorphism' | 'retro' | 'organic' | 'oled').
 class VibePresetConverter extends TypeConverter<VibePreset, String> {
   const VibePresetConverter();
 
@@ -145,6 +145,9 @@ class Tracks extends Table {
   IntColumn get enrichmentAttempts => integer().withDefault(const Constant(0))();
   TextColumn get enrichmentStatus =>
       text().map(const EnrichmentStatusConverter()).withDefault(const Constant('pending'))();
+  // BPM estimé hors ligne quand le tag manque (distinct de `bpm`, valeur de
+  // tag ou 120 par défaut). Null : pas d'estimation.
+  IntColumn get estimatedBpm => integer().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -162,6 +165,23 @@ class TrackArtists extends Table {
 
   @override
   Set<Column> get primaryKey => {trackId, artistName};
+}
+
+/// Enveloppe des basses d'un morceau, calculée hors ligne (1 octet par pas de
+/// 40 ms, ~6 Ko) pour la réactivité de la Vibe. Table à part plutôt qu'une
+/// colonne de [Tracks] : les requêtes de bibliothèque et de file d'attente
+/// chargent toutes les colonnes de `tracks` en continu, ce blob y coûterait de
+/// la mémoire pour rien. Volontairement sans `references(Tracks)` : cette base
+/// n'active jamais `PRAGMA foreign_keys` (voir [AppDatabase.configureConnection]),
+/// une cascade ne s'exécuterait donc jamais. Les lignes orphelines (morceau
+/// supprimé) sont purgées à chaque enregistrement d'une analyse, voir
+/// TrackRepository.saveAudioAnalysis.
+class TrackBassEnvelopes extends Table {
+  TextColumn get trackId => text()();
+  BlobColumn get envelope => blob()();
+
+  @override
+  Set<Column> get primaryKey => {trackId};
 }
 
 /// `original_creator` n'est renseigné que pour les playlists forkées (voir Étape 6),
@@ -213,6 +233,13 @@ class Playlists extends Table {
   // pas encore ordonnée — affichée après les playlists ordonnées, dans l'ordre
   // de création.
   IntColumn get carouselPosition => integer().nullable()();
+  // Image de la Vibe "Behind the window" (`vibeStyle == neon`) importée depuis
+  // la galerie : chemin local sous Music/AppFolder/window_backgrounds/, vide si
+  // aucune. Volontairement distincte de `customBackgroundImagePath` (Vibe
+  // personnalisée) : importer l'une ne doit jamais supprimer ni remplacer
+  // l'autre, et la couche plein écran du Player ne la lit pas (c'est
+  // FluidBackground qui l'affiche derrière la vitre).
+  TextColumn get windowBackgroundImagePath => text().withDefault(const Constant(''))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -292,14 +319,14 @@ class BlacklistedTracks extends Table {
   Set<Column> get primaryKey => {filePath};
 }
 
-@DriftDatabase(tables: [Tracks, Playlists, PlaylistTracks, TrackArtists, PlaylistMissingTracks, BlacklistedTracks])
+@DriftDatabase(tables: [Tracks, Playlists, PlaylistTracks, TrackArtists, PlaylistMissingTracks, BlacklistedTracks, TrackBassEnvelopes])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 20;
+  int get schemaVersion => 21;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -491,6 +518,14 @@ class AppDatabase extends _$AppDatabase {
                 next++;
               }
             }
+          }
+          if (from < 21) {
+            // Image "Behind the window" par playlist, BPM estimé hors ligne et
+            // table des enveloppes de basses : colonnes additives (les lignes
+            // existantes gardent '' / null) et une table neuve, vide.
+            await m.addColumn(playlists, playlists.windowBackgroundImagePath);
+            await m.addColumn(tracks, tracks.estimatedBpm);
+            await m.createTable(trackBassEnvelopes);
           }
         },
       );

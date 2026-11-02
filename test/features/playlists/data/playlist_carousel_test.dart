@@ -1,7 +1,9 @@
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:playlist_app/core/storage/database/app_database.dart';
 import 'package:playlist_app/core/storage/database/track_repository.dart';
+import 'package:playlist_app/core/theme/vibe_engine/vibe_engine.dart';
 import 'package:playlist_app/features/playlists/data/drift_playlist_repository.dart';
 
 void main() {
@@ -18,6 +20,21 @@ void main() {
   });
 
   tearDown(() => db.close());
+
+  test('updateWindowBackgroundImagePath writes and clears only the window image column', () async {
+    await db.update(db.playlists).write(const PlaylistsCompanion(customBackgroundImagePath: Value('/c.jpg')));
+
+    await repo.updateWindowBackgroundImagePath('a', '/m/window_backgrounds/a_1.jpg');
+    final Playlist a = await (db.select(db.playlists)..where((p) => p.id.equals('a'))).getSingle();
+    expect(a.windowBackgroundImagePath, '/m/window_backgrounds/a_1.jpg');
+    expect(a.customBackgroundImagePath, '/c.jpg');
+    expect(a.vibeStyle, VibePreset.minimal);
+
+    await repo.updateWindowBackgroundImagePath('a', '');
+    final Playlist cleared = await (db.select(db.playlists)..where((p) => p.id.equals('a'))).getSingle();
+    expect(cleared.windowBackgroundImagePath, '');
+    expect(cleared.customBackgroundImagePath, '/c.jpg');
+  });
 
   Future<List<String>> carouselIds() async => (await repo.watchCarousel().first).map((p) => p.id).toList();
 

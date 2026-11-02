@@ -8,13 +8,14 @@ uniform float uTime;        // secondes écoulées, montant en continu
 uniform vec2 uResolution;   // taille du canvas en pixels
 uniform float uTempo;       // BPM du morceau en cours (TempoSyncController)
 uniform vec3 uPrimaryColor; // couleur d'accent de la Vibe active (0..1)
-uniform float uStyle;       // 0=cyberpunk 1=synthwave 2=nature 3=étoiles
-// Vibe Neon (styleIndex 0) uniquement — texture de la photo de fond
-// (CyberpunkBackdrop), échantillonnée directement par ce shader pour la
-// réfraction des gouttes et la détection réelle des zones néon. Sampler
+uniform float uStyle;       // 0=behind the window 1=synthwave 2=nature 3=étoiles
+// "Behind the window" (styleIndex 0) uniquement — l'image importée par
+// l'utilisateur, décodée une seule fois à la taille de l'écran (la même
+// ui.Image que la Couche 1 de FluidBackground), échantillonnée par ce shader
+// pour la réfraction des gouttes et le scintillement des zones. Sampler
 // séparé des floats ci-dessus (index propre via setImageSampler), mais
 // déclaré ici pour rester avec le reste des uniforms fournis par Dart.
-uniform vec2 uBackdropSize;   // largeur/hauteur natives de la photo
+uniform vec2 uBackdropSize;   // largeur/hauteur de l'image décodée
 uniform float uBackdropReady; // 1.0 une fois la texture réellement chargée
 uniform sampler2D uBackdrop;
 // Retro (styleIndex 1) uniquement — 1.0 quand la pochette est masquée
@@ -24,6 +25,24 @@ uniform sampler2D uBackdrop;
 // réduit dans ce cas précis pour ne jamais chevaucher le texte, plutôt que
 // de dégrader sa taille/position habituelle quand la pochette reste visible.
 uniform float uCoverHidden;
+// "Behind the window" uniquement — déclarés après les uniforms historiques
+// pour ne décaler aucun index de setFloat des autres styles.
+// Temps du scintillement (s), intégré côté Dart à la vitesse bpm/120 bornée :
+// un changement de tempo ralentit/accélère l'effet sans faire sauter sa phase,
+// ce que uTime × vitesse provoquerait.
+uniform float uNeonPhase;
+// Intensité 0..1 : basses lissées du morceau, ou pulsation du tempo en repli.
+uniform float uNeonDrive;
+// Zones colorées détectées une fois par image (window_color_zones.dart), en
+// coordonnées image : x, y (0..1), rayon (fraction du plus petit côté), poids
+// (0..1, 0 = emplacement vide).
+uniform vec4 uZoneShape[6];
+uniform vec4 uZoneColor[6]; // rgb 0..1, a inutilisé
+// Miniature de la même image (48 px de large, filtrage bilinéaire) : la buée
+// la lit en 4 points décalés pour un flou qui ne coûte rien, là où un vrai
+// flou plein écran par frame serait hors budget. Sampler factice 1x1 sans
+// image (jamais lu : uBackdropReady = 0).
+uniform sampler2D uBackdropBlur;
 
 out vec4 fragColor;
 
@@ -33,7 +52,7 @@ vec2 hash21(float p) {
   return fract((p3.xx + p3.yz) * p3.zy);
 }
 
-// Reproduit le mapping BoxFit.cover de Flutter (Couche 1, Image.asset) pour
+// Reproduit le mapping BoxFit.cover de Flutter (Couche 1, RawImage) pour
 // que l'échantillon pris ici tombe exactement sur le même pixel de la photo
 // que celui affiché à l'écran à cet endroit.
 vec2 coverUV(vec2 uv, float canvasAspect, float imageAspect) {
@@ -64,80 +83,96 @@ void main() {
   float alpha = 0.0;
 
   if (styleIndex == 0) {
-    // Cyberpunk (Feuille de route Vibe v7) : ce shader échantillonne
-    // désormais lui-même la photo de fond (uBackdrop) — jusque-là affichée
-    // uniquement par Flutter en dessous (Couche 1, Image.asset) — pour deux
-    // raisons précises : (a) réfracter la scène sous chaque goutte de pluie
-    // comme une vraie micro-lentille, (b) détecter les zones réellement
-    // roses/cyan de l'image pour le grésillement néon, plutôt que d'assener
-    // des patches sombres placés à l'aveugle. `backdropReady` (uBackdropReady)
-    // désactive proprement tout ce qui en dépend tant que la texture n'est
-    // pas chargée — jamais de lecture de sampler invalide.
+    // "Behind the window" : vitre pluvieuse devant l'image importée par
+    // l'utilisateur (Couche 1, RawImage en dessous). Ce shader échantillonne
+    // lui-même la même image (uBackdrop) pour (a) réfracter la scène sous
+    // chaque goutte de pluie comme une vraie micro-lentille, (b) faire vivre
+    // les zones colorées détectées une fois pour toutes côté Dart (uZoneShape/
+    // uZoneColor) ; et sa miniature (uBackdropBlur) pour le flou de la buée.
+    // `backdropReady` (uBackdropReady) désactive proprement tout ce qui en
+    // dépend sans image — jamais de lecture de sampler invalide : il reste
+    // alors l'aplat nuit de la Couche 1, la pluie et la teinte de la buée.
     bool backdropReady = uBackdropReady > 0.5;
     float imageAspect = uBackdropSize.x / max(uBackdropSize.y, 1.0);
     vec2 imgUV = coverUV(uv, aspect, imageAspect);
     vec3 baseColor = backdropReady ? texture(uBackdrop, imgUV).rgb : vec3(0.05, 0.06, 0.08);
 
+    // Couches 1) et 2) composées en alpha prémultiplié, l'une sur l'autre :
+    // là où aucun effet n'agit, alpha reste à 0 et l'image de la Couche 1
+    // (filtrée par Flutter) se voit telle quelle — ni respiration globale ni
+    // voile uniforme, seules les zones et les bords vivent.
     vec3 scene = vec3(0.0);
     float sceneAlpha = 0.0;
 
-    // --- 0) Respiration globale ------------------------------------------
-    // Modulation sinusoïdale LENTE (période ~12,5s) de l'ombrage global,
-    // indépendante et bien plus lente que le grésillement néon ci-dessous —
-    // la ville semble respirer doucement dans la nuit plutôt que de
-    // clignoter. Contribution volontairement faible (7% max).
-    float breathe = sin(uTime * 0.5) * 0.5; // -0.5..0.5
-    vec3 breatheColor = breathe >= 0.0 ? vec3(1.0) : vec3(0.02);
-    float breatheAlpha = abs(breathe) * 0.07;
-    scene = mix(scene, breatheColor, breatheAlpha);
-    sceneAlpha = max(sceneAlpha, breatheAlpha);
-
-    // --- 1) Grésillement néon ---------------------------------------------
-    // Détection réelle des pixels roses/cyan de la photo (canaux dominants +
-    // luminosité), puis scintillement BIDIRECTIONNEL par cellule (creux
-    // d'assombrissement ET pics de surbrillance/bloom, jamais un simple
-    // masque sombre plaqué), calé sur le pulse du battement pour un faux
-    // contact électrique d'enseigne.
+    // --- 1) Néons dans le brouillard ---------------------------------------
+    // Remplace l'ancien grésillement (détection rose/cyan pixel par pixel sur
+    // une grille de cellules) : chaque zone colorée de l'image respire. Son
+    // centre s'éclaircit (jusqu'à +18 %) puis s'assombrit à moitié moins,
+    // pendant que ses contours diffusent sa couleur en un halo plus large que
+    // son rayon (~9 % d'opacité au plus), comme une enseigne vue à travers
+    // la brume. Intensité de base faible (30 %), le reste suit les basses :
+    // un fond qui vit, jamais un clignotement.
     if (backdropReady) {
-      float maxC = max(baseColor.r, max(baseColor.g, baseColor.b));
-      float minC = min(baseColor.r, min(baseColor.g, baseColor.b));
-      float saturation = maxC - minC;
-      // Portes de brillance/saturation volontairement strictes : la brume
-      // ambiante teal/cyan du grade colorimétrique cyberpunk couvre presque
-      // toute la photo, sature légèrement ET tire vers le bleu — sans ces
-      // seuils, `neonWeight` se déclenchait sur l'image entière plutôt que
-      // sur les vraies enseignes (bug réel constaté : la grille de cellules
-      // du grésillement se voyait comme un quadrillage plaqué partout).
-      // Seuls les pixels à la fois TRÈS lumineux et TRÈS saturés — le
-      // signature d'une enseigne néon, pas d'un ciel ou d'un mur embués —
-      // passent ces deux portes.
-      float brightGate = smoothstep(0.5, 0.8, maxC);
-      float satGate = smoothstep(0.22, 0.45, saturation);
-      float pinkness = clamp(min(baseColor.r, baseColor.b) - baseColor.g, 0.0, 1.0);
-      float cyanness = clamp(min(baseColor.g, baseColor.b) - baseColor.r, 0.0, 1.0);
-      float neonWeight = clamp(max(pinkness, cyanness) * 3.0, 0.0, 1.0) * brightGate * satGate;
-
-      vec2 flickerCell = floor(imgUV * 70.0);
-      vec2 flickerSeed = hash21(flickerCell.x * 13.7 + flickerCell.y * 91.3 + 4.0);
-      float flickerPhase = uTime * (0.8 + flickerSeed.x * 2.2) + flickerSeed.y * 20.0;
-      float flickerWave = sin(flickerPhase);       // -1..1, bidirectionnel dans le temps
-      float beatKick = 0.4 + pulse * 0.6;          // contact plus franc sur le battement
-      float flickerStrength = flickerWave * beatKick;
-
-      vec3 flickered = baseColor * (1.0 + flickerStrength * 0.55);
-      flickered += vec3(max(flickerStrength, 0.0)) * (baseColor + 0.2) * 0.5; // bloom sur les pics
-
-      float flickerAlpha = neonWeight * abs(flickerStrength) * 0.85;
-      scene = mix(scene, flickered, flickerAlpha);
-      sceneAlpha = max(sceneAlpha, flickerAlpha);
+      vec3 lit = baseColor;
+      float envelope = 0.0;
+      // Distances en fractions du plus petit côté de l'image, comme le rayon.
+      vec2 zoneScale = vec2(imageAspect, 1.0) / min(imageAspect, 1.0);
+      float drive = 0.3 + 0.7 * clamp(uNeonDrive, 0.0, 1.0);
+      for (int i = 0; i < 6; i++) {
+        vec4 shape = uZoneShape[i];
+        if (shape.w > 0.0) {
+          float d = length((imgUV - shape.xy) * zoneScale) / max(shape.z, 0.001);
+          float core = exp(-d * d * 1.5); // ~0,22 au bord de la zone
+          float halo = exp(-d * d * 0.25); // ~0,37 à deux rayons
+          // Phase propre (angle d'or) : les zones ne respirent jamais en
+          // chœur. 1,96 rad/s = une respiration toutes les ~3,2 s à 120 BPM.
+          float wave = sin(uNeonPhase * 1.96 + float(i) * 2.39996);
+          // La zone dominante (poids 1) un peu plus présente que les autres.
+          float presence = (0.7 + 0.3 * shape.w) * drive;
+          float glow = wave >= 0.0 ? wave : wave * 0.5;
+          lit *= 1.0 + 0.18 * glow * presence * core;
+          lit = mix(lit, uZoneColor[i].rgb, 0.09 * halo * (0.55 + 0.45 * wave) * presence);
+          envelope = max(envelope, halo);
+        }
+      }
+      // `lit` est la couleur voulue à l'écran : la couche qui y mène par-dessus
+      // la Couche 1 vaut (lit − base·(1 − a)) en prémultiplié, avec pour alpha
+      // l'enveloppe des halos (nulle loin des zones).
+      sceneAlpha = clamp(envelope, 0.0, 1.0);
+      scene = clamp(lit - baseColor * (1.0 - sceneAlpha), vec3(0.0), vec3(sceneAlpha));
     }
 
-    // --- 2) Voile de condensation ------------------------------------------
-    // Plat et uniforme, jamais un dégradé radial centré sur l'écran — c'est
-    // précisément ce qui dessinait par erreur un faux "hublot rond" dans une
-    // version précédente de ce shader.
-    scene = mix(scene, vec3(0.08, 0.1, 0.13), 0.045);
-    sceneAlpha = max(sceneAlpha, 0.045);
+    // --- 2) Buée des bords -------------------------------------------------
+    // Légère, accrochée aux bords (plus dense dans les coins, où les deux
+    // bandes se cumulent), jamais un dégradé radial centré : c'est ce qui
+    // dessinait par erreur un faux "hublot rond" dans une ancienne version.
+    // Elle avance lentement vers le centre puis se retire (période 11 s),
+    // indépendamment de la musique ; une ondulation lente de sa limite évite
+    // l'effet de cadre rectiligne.
+    vec2 edgeDist = min(uv, 1.0 - uv) * uResolution / min(uResolution.x, uResolution.y);
+    float fogCycle = 0.5 - 0.5 * cos(uTime * 0.5712); // 2π / 11 s
+    float fogReach = mix(0.16, 0.24, fogCycle) * (1.0 + 0.12 * sin(uv.x * 7.0 + uv.y * 5.0 + uTime * 0.2));
+    float fogMask = 1.0 - smoothstep(0.0, fogReach, edgeDist.x) * smoothstep(0.0, fogReach, edgeDist.y);
+    // Branche sur le masque : le centre de l'écran ne paie aucune lecture.
+    if (fogMask > 0.002) {
+      vec3 fogColor = vec3(0.62, 0.68, 0.74); // teinte laiteuse
+      float fogAlpha = fogMask * 0.14;
+      if (backdropReady) {
+        // 4 lectures bilinéaires à ±0,75 texel de la miniature : lissent ses
+        // gros texels en un flou doux. Coordonnées bornées — au bord même de
+        // l'image, un échantillon hors [0, 1] pourrait boucler sur le côté
+        // opposé, précisément là où la buée est la plus dense.
+        vec2 o = vec2(1.0 / 48.0, imageAspect / 48.0) * 0.75;
+        vec3 blurred = 0.25 * (texture(uBackdropBlur, clamp(imgUV + vec2(-o.x, -o.y), 0.0, 1.0)).rgb +
+            texture(uBackdropBlur, clamp(imgUV + vec2(o.x, -o.y), 0.0, 1.0)).rgb +
+            texture(uBackdropBlur, clamp(imgUV + vec2(-o.x, o.y), 0.0, 1.0)).rgb +
+            texture(uBackdropBlur, clamp(imgUV + vec2(o.x, o.y), 0.0, 1.0)).rgb);
+        fogColor = mix(blurred, fogColor, 0.22);
+        fogAlpha = fogMask * 0.6;
+      }
+      scene = fogColor * fogAlpha + scene * (1.0 - fogAlpha);
+      sceneAlpha = fogAlpha + sceneAlpha * (1.0 - fogAlpha);
+    }
 
     // --- 3) Vitre pluvieuse ------------------------------------------------
     // 3a) Micro-gouttelettes de condensation, statiques (aucune dépendance à

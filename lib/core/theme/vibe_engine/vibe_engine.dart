@@ -10,6 +10,8 @@ import 'package:flutter/material.dart';
 /// (Section 3) ; `newOled` est un preset distinct ajouté par cette même
 /// section, volontairement séparé plutôt que de réutiliser `oled` : les deux
 /// ont désormais des rendus différents (nébuleuse animée vs noir pur figé).
+/// De même `neon` reste ce nom en base malgré son libellé "Behind the window" :
+/// un manifeste exporté doit rester lisible par une version plus ancienne de l'app.
 enum VibePreset { minimal, neon, glassmorphism, retro, organic, oled, custom, newOled }
 
 class VibeTheme extends ThemeExtension<VibeTheme> {
@@ -40,10 +42,10 @@ class VibeTheme extends ThemeExtension<VibeTheme> {
 extension VibePresetStyle on VibePreset {
   List<Color> get gradientColors => switch (this) {
         VibePreset.minimal => const [Color(0xFFF5F5F5), Color(0xFFE0E0E0)],
-        // Cyberpunk/Blade Runner (Feuille de route Vibe v2) : nuit bleu-cyan
-        // très sombre et moite en base (voir `_FluidPainter.paint`,
-        // `colors.first` remplit tout le canvas) avec des éclats néon
-        // magenta/rose et cyan fluo qui dérivent par-dessus.
+        // "Behind the window" : nuit bleu-cyan très sombre et moite en base
+        // (voir `_FluidPainter.paint`, `colors.first` remplit tout le canvas),
+        // derrière la vitre pluvieuse posée sur l'image importée par
+        // l'utilisateur ; magenta/rose et cyan fluo gardés pour l'accent.
         VibePreset.neon => const [Color(0xFF050D1A), Color(0xFFFF007F), Color(0xFF00F3FF)],
         // Verre teinté plutôt que blanc quasi-transparent : l'app n'a pas de
         // flou d'arrière-plan (BackdropFilter) pour donner du relief à un
@@ -98,7 +100,7 @@ extension VibePresetStyle on VibePreset {
   // Dart/la valeur stockée en base restent `oled` (voir doc de [VibePreset]).
   String get label => switch (this) {
         VibePreset.minimal => 'Minimal',
-        VibePreset.neon => 'Neon',
+        VibePreset.neon => 'Behind the window',
         VibePreset.glassmorphism => 'Glassmorphism',
         VibePreset.retro => 'Retro',
         VibePreset.organic => 'Organic',
@@ -132,9 +134,9 @@ extension VibeCoverPaletteUsage on VibePreset {
 }
 
 /// Style de particules du shader GLSL audio-réactif (Vibe Engine — voir
-/// assets/shaders/vibe_particles.frag) : 0 = surcouche buée/pluie/grésillement
-/// néon par-dessus la photo de skyline plein écran (`neon`, voir
-/// FluidBackground/kCyberpunkCityImage), 1 = grille de perspective + soleil
+/// assets/shaders/vibe_particles.frag) : 0 = surcouche buée/pluie/zones scintillantes
+/// par-dessus l'image importée par l'utilisateur (`neon`, "Behind the window" :
+/// vitre pluvieuse, voir FluidBackground), 1 = grille de perspective + soleil
 /// strié synthwave (`retro`), 2 = lianes et lucioles (`organic`), 3 = champ
 /// d'étoiles (`oled`, INCHANGÉ).
 extension VibeParticleStyle on VibePreset {
@@ -177,6 +179,7 @@ class VibeVisual {
     this.effect = VibeCustomEffect.fluid,
     this.customBackgroundVideoPath,
     this.showCoverImage = true,
+    this.windowImagePath,
   });
 
   final List<Color> gradientColors;
@@ -199,6 +202,11 @@ class VibeVisual {
   // — quand non nulle, remplace entièrement le rendu shader/dégradé/[effect]
   // du Master Player (voir MasterPlayerScreen), jamais superposée à celui-ci.
   final String? customBackgroundVideoPath;
+  // Image importée pour la Vibe "Behind the window" (`VibePreset.neon`
+  // uniquement) — null si aucune. Volontairement PAS dans [backgroundImagePath] :
+  // la couche plein écran du Master Player afficherait l'image par-dessus la
+  // vitre ; c'est FluidBackground qui la peint derrière la pluie.
+  final String? windowImagePath;
 
   // "Aucune couleur" (Vibe Creator) : dégradé entièrement transparent — le
   // rendu ne doit alors peindre aucun aplat opaque, pour laisser voir la
@@ -221,7 +229,8 @@ class VibeVisual {
           other.showCoverImage == showCoverImage &&
           other.preset == preset &&
           other.effect == effect &&
-          other.customBackgroundVideoPath == customBackgroundVideoPath;
+          other.customBackgroundVideoPath == customBackgroundVideoPath &&
+          other.windowImagePath == windowImagePath;
 
   @override
   int get hashCode => Object.hash(
@@ -232,5 +241,6 @@ class VibeVisual {
         preset,
         effect,
         customBackgroundVideoPath,
+        windowImagePath,
       );
 }

@@ -194,6 +194,14 @@ class StorageManagerService {
   Future<File> importVibeBackgroundVideo(File sourceFile, String playlistId) =>
       _importOwned(sourceFile, 'vibe_backgrounds', playlistId, sameKind: _isVideoExtension);
 
+  /// Image de la Vibe "Behind the window" (preset `neon`), dans son propre
+  /// dossier `Music/AppFolder/window_backgrounds/` : surtout pas
+  /// `vibe_backgrounds/`, sinon importer l'une supprimerait celle de la Vibe
+  /// personnalisée de la même playlist (même id). Remplace l'éventuelle image
+  /// précédente de cette playlist.
+  Future<File> importWindowBackgroundImage(File sourceFile, String playlistId) =>
+      _importOwned(sourceFile, 'window_backgrounds', playlistId);
+
   /// Pochette choisie manuellement (appui long sur un morceau) dans
   /// `Music/AppFolder/track_covers/`.
   Future<File> importTrackCoverImage(File sourceFile, String trackId) =>

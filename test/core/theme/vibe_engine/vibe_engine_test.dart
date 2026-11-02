@@ -26,6 +26,11 @@ void main() {
     expect(VibePreset.oled.label, 'Space');
   });
 
+  test('"Behind the window" keeps the stored name neon for backward compatibility', () {
+    expect(VibePreset.neon.name, 'neon');
+    expect(VibePreset.neon.label, 'Behind the window');
+  });
+
   test('newOled has a pure black/white identity and no particle shader', () {
     expect(VibePreset.newOled.gradientColors, [const Color(0xFF000000), const Color(0xFF000000)]);
     expect(VibePreset.newOled.accentColor, const Color(0xFFFFFFFF));

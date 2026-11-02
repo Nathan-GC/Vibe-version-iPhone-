@@ -25,6 +25,11 @@ extension PlaylistVibeResolver on Playlist {
         accentColor: vibeStyle.accentColor,
         preset: vibeStyle,
         showCoverImage: showCoverImage,
+        // Image "Behind the window" : `neon` seulement, et hors de
+        // `backgroundImagePath` (voir VibeVisual.windowImagePath).
+        windowImagePath: vibeStyle == VibePreset.neon && windowBackgroundImagePath.isNotEmpty
+            ? windowBackgroundImagePath
+            : null,
       );
     }
 

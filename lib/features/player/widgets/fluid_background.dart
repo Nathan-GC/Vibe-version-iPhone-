@@ -1,22 +1,13 @@
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:palette_generator/palette_generator.dart';
 
 import '../../../core/animation/tempo_sync/tempo_sync_controller.dart';
 import '../../../core/shared/widgets/local_cover_image.dart';
 import '../../../core/theme/vibe_engine/vibe_engine.dart';
-
-/// Photo de fond de la Vibe Neon (Vitre pluvieuse sur ville cyberpunk) — voir
-/// `_FluidBackgroundState.build`. Le dossier `assets/images/` est déclaré
-/// même vide dans pubspec.yaml : tant que ce fichier n'y est pas présent,
-/// `Image.asset` échoue silencieusement (voir `errorBuilder`) et un simple
-/// aplat nocturne prend le relais — aucun crash, juste pas de photo tant
-/// qu'elle n'est pas fournie.
-const String kCyberpunkCityImage = 'assets/images/cyberpunk_city_1.png';
+import 'window_backdrop.dart';
 
 /// Fond animé du Player (Étape 3) : la palette dominante de la pochette en
 /// cours (`palette_generator`) remplace les couleurs de la Vibe active dès
@@ -31,12 +22,14 @@ const String kCyberpunkCityImage = 'assets/images/cyberpunk_city_1.png';
 /// asynchrone et peut échouer (device/plateforme sans support) : dans ce cas
 /// le dégradé/halos existants restent affichés seuls, sans erreur visible.
 ///
-/// Cas particulier `VibePreset.neon` (Vibe v6, structure volontairement
-/// simple à 2 couches) : Couche 1 = `kCyberpunkCityImage` plein écran
-/// (`Image.asset`, `BoxFit.cover`) ; Couche 2 = le shader en semi-transparence
-/// par-dessus, qui ne gère plus que buée légère, pluie qui ruisselle et
-/// grésillement des néons au tempo — jamais de dégradé/halos procéduraux ni
-/// de transition (pas de flash, pas de changement d'image) pour ce preset.
+/// Cas particulier `VibePreset.neon` ("Behind the window", structure
+/// volontairement simple à 2 couches) : Couche 1 = l'image importée par
+/// l'utilisateur (`VibeVisual.windowImagePath`, voir window_backdrop.dart),
+/// aplat nocturne sans image ou tant qu'elle se décode ; Couche 2 = le shader
+/// en semi-transparence par-dessus, qui ne gère que buée des bords, pluie qui
+/// ruisselle et scintillement des zones colorées de l'image au rythme des
+/// basses — jamais de dégradé/halos procéduraux ni de transition (pas de
+/// flash) pour ce preset.
 ///
 /// Effet "Fluide" du Vibe Creator (`VibePreset.custom` +
 /// `VibeCustomEffect.fluid`) : turbulence bicolore plein écran rendue par
@@ -68,24 +61,28 @@ class FluidBackground extends StatefulWidget {
 }
 
 class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProviderStateMixin {
-  // Partagés par toutes les instances : ni le shader ni la texture de fond
-  // Neon ne dépendent d'un état propre à une playlist, inutile de les
-  // recompiler/redécoder à chaque ouverture du Player.
+  // Partagés par toutes les instances : les shaders ne dépendent pas d'un état
+  // propre à une playlist, inutile de les recompiler à chaque ouverture du Player.
   static Future<ui.FragmentProgram>? _shaderProgramFuture;
   static Future<ui.FragmentProgram>? _nebulaProgramFuture;
   static Future<ui.FragmentProgram>? _turbulenceProgramFuture;
-  static Future<ui.Image>? _backdropImageFuture;
   static Future<ui.Image>? _dummySamplerImageFuture;
+  // Cache à une seule entrée de l'image "Behind the window" (image écran,
+  // miniature de buée, zones), partagé comme les shaders : rouvrir le Player
+  // sur la même playlist ne redécode rien. Remplacé seulement quand le chemin
+  // ou, nettement, la taille cible change (voir _syncWindowBackdrop).
+  static WindowBackdrop? _windowBackdrop;
+  // Zap rapide (même principe que _maybeExtractPalette) : seul le dernier
+  // chargement demandé peut remplir le cache, un plus lent parti avant est
+  // jeté. La clé évite de relancer le même chargement à chaque rebuild — y
+  // compris après un échec, qu'il serait inutile de répéter à chaque frame.
+  static int _windowRequestId = 0;
+  static String? _windowPendingKey;
 
   late final AnimationController _driftController = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 18),
   )..repeat();
-
-  // Passe à `false` dès que `kCyberpunkCityImage` échoue à charger — évite de
-  // retenter (et de re-déclencher l'errorBuilder) à chaque frame tant que le
-  // fichier n'a pas été ajouté.
-  bool _cityImageAvailable = true;
 
   List<Color>? _paletteColors;
   String? _paletteSourcePath;
@@ -102,12 +99,12 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
   // Clé du CustomPaint lui-même : référence de coordonnées pour convertir la
   // position de la pochette (voir _coverCenterInCanvas).
   final GlobalKey _paintKey = GlobalKey();
-  // Décodage indépendant du même fichier que Couche 1 (Image.asset) : le
-  // shader a besoin des pixels bruts (sampler2D) pour la réfraction des
-  // gouttes et la détection des zones néon, ce qu'un widget Image ne peut
-  // pas lui fournir — voir vibe_particles.frag (uBackdrop).
-  ui.Image? _backdropImage;
   ui.Image? _dummySamplerImage;
+  // Temps du scintillement des zones, intégré frame par frame à la vitesse
+  // du tempo (voir uNeonPhase dans vibe_particles.frag) : multiplier le temps
+  // total par la vitesse ferait sauter la phase à chaque changement de BPM.
+  double _neonPhase = 0;
+  double? _neonClock;
 
   @override
   void initState() {
@@ -117,11 +114,8 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
     // Sampler factice : nécessaire à TOUS les presets (`setImageSampler`
     // exige une image non nulle dès que le shader dessine quoi que ce soit,
     // y compris retro/organic/oled qui ne lisent jamais uBackdrop) — chargé
-    // sans condition. La vraie photo, elle, ne sert qu'à la Vibe Neon :
-    // inutile de décoder ~500 Ko et de réserver une texture GPU pour une
-    // session qui reste sur un autre preset.
+    // sans condition.
     _loadDummySamplerImage();
-    if (widget.vibe.preset == VibePreset.neon) _loadBackdropImage();
     if (widget.vibe.preset == VibePreset.oled) _loadNebulaShader();
     if (_isCustomFluid) _loadTurbulenceShader();
   }
@@ -130,9 +124,67 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
   void didUpdateWidget(covariant FluidBackground oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.coverArtPath != widget.coverArtPath) _maybeExtractPalette();
-    if (widget.vibe.preset == VibePreset.neon && _backdropImage == null) _loadBackdropImage();
     if (widget.vibe.preset == VibePreset.oled && _nebulaShader == null) _loadNebulaShader();
     if (_isCustomFluid && _turbulenceShader == null) _loadTurbulenceShader();
+    _syncWindowBackdrop();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Premier affichage, puis changement de taille d'écran (rotation).
+    _syncWindowBackdrop();
+  }
+
+  /// Lance le décodage de l'image "Behind the window" si le cache ne
+  /// correspond pas déjà au chemin et à la taille de l'écran (pixels
+  /// physiques, pour une image nette sans en décoder plus que l'écran).
+  void _syncWindowBackdrop() {
+    final String? path = widget.vibe.preset == VibePreset.neon ? widget.vibe.windowImagePath : null;
+    if (path == null || path.isEmpty) return;
+    final Size screen = MediaQuery.sizeOf(context) * MediaQuery.devicePixelRatioOf(context);
+    final WindowBackdrop? cached = _windowBackdrop;
+    if (cached != null &&
+        cached.path == path &&
+        !windowDecodeSizeChanged(
+          cached.decodeSize,
+          windowDecodeSize(cached.sourceWidth, cached.sourceHeight, screen),
+        )) {
+      return;
+    }
+    final String key = '$path|${screen.width.round()}x${screen.height.round()}';
+    if (key == _windowPendingKey) return;
+    _windowPendingKey = key;
+    _loadWindowBackdrop(path, screen, ++_windowRequestId);
+  }
+
+  Future<void> _loadWindowBackdrop(String path, Size screen, int requestId) async {
+    final WindowBackdrop? loaded = await loadWindowBackdrop(path, screen);
+    if (requestId != _windowRequestId) {
+      loaded?.dispose();
+      return;
+    }
+    // Échec (fichier absent, illisible, format non supporté) : l'aplat nuit
+    // reste affiché, et la clé en attente empêche de réessayer en boucle.
+    if (loaded == null) return;
+    final WindowBackdrop? previous = _windowBackdrop;
+    _windowBackdrop = loaded;
+    if (mounted) setState(() {});
+    // L'ancienne image n'est libérée qu'après la frame qui affiche déjà la
+    // nouvelle : RawImage et le sampler du shader ne doivent jamais peindre
+    // une ui.Image disposée.
+    if (previous != null) {
+      WidgetsBinding.instance
+        ..addPostFrameCallback((_) => previous.dispose())
+        ..ensureVisualUpdate();
+    }
+  }
+
+  /// Image du cache, seulement si c'est bien celle de la Vibe affichée.
+  WindowBackdrop? get _currentWindowBackdrop {
+    final WindowBackdrop? backdrop = _windowBackdrop;
+    if (widget.vibe.preset != VibePreset.neon || backdrop == null) return null;
+    return backdrop.path == widget.vibe.windowImagePath ? backdrop : null;
   }
 
   bool get _isCustomFluid => widget.vibe.preset == VibePreset.custom && widget.vibe.effect == VibeCustomEffect.fluid;
@@ -184,7 +236,7 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
   }
 
   /// Sampler de repli 1x1 transparent : `setImageSampler` exige une image non
-  /// nulle même quand `kCyberpunkCityImage` n'est pas encore chargée (ou
+  /// nulle même quand l'image de l'utilisateur n'est pas encore chargée (ou
   /// absente) — le shader se base alors sur `uBackdropReady` (mis à 0) pour
   /// ne jamais lire ce pixel factice.
   Future<void> _loadDummySamplerImage() async {
@@ -194,7 +246,7 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
       if (!mounted) return;
       setState(() => _dummySamplerImage = image);
     } catch (_) {
-      // Si même ça échoue, le shader Neon reste simplement désactivé (voir
+      // Si même ça échoue, le shader "Behind the window" reste simplement désactivé (voir
       // paint()) — les autres presets ne dépendent pas de ce sampler.
     }
   }
@@ -203,28 +255,6 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
     final ui.PictureRecorder recorder = ui.PictureRecorder();
     Canvas(recorder).drawRect(const Rect.fromLTWH(0, 0, 1, 1), Paint()..color = Colors.transparent);
     return recorder.endRecording().toImage(1, 1);
-  }
-
-  Future<void> _loadBackdropImage() async {
-    try {
-      _backdropImageFuture ??= _decodeBackdropImage();
-      final ui.Image image = await _backdropImageFuture!;
-      if (!mounted) return;
-      setState(() => _backdropImage = image);
-    } catch (_) {
-      // Fichier absent/illisible — voir _cityImageAvailable pour la Couche 1
-      // (Image.asset) ; côté shader, uBackdropReady reste à 0 et les effets
-      // qui en dépendent (réfraction, détection néon) se désactivent
-      // proprement plutôt que d'échantillonner une texture invalide.
-    }
-  }
-
-  static Future<ui.Image> _decodeBackdropImage() async {
-    final ByteData data = await rootBundle.load(kCyberpunkCityImage);
-    final Uint8List bytes = data.buffer.asUint8List();
-    final ui.Codec codec = await ui.instantiateImageCodec(bytes);
-    final ui.FrameInfo frame = await codec.getNextFrame();
-    return frame.image;
   }
 
   Future<void> _maybeExtractPalette() async {
@@ -291,18 +321,28 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
         ignoresCoverPalette ? widget.vibe.gradientColors : (_paletteColors ?? widget.vibe.gradientColors);
     final int? particleStyle = widget.vibe.preset?.particleStyleIndex;
     final bool isSpaceNebula = widget.vibe.preset == VibePreset.oled;
+    final WindowBackdrop? windowBackdrop = _currentWindowBackdrop;
 
     return AnimatedBuilder(
       animation: Listenable.merge([widget.tempoController, _driftController]),
       builder: (context, _) {
+        final TempoSyncController tempo = widget.tempoController;
         // Pic d'intensité à mi-battement, retombe aux bords — même logique
         // que l'ancien fond pulsé, réutilisée ici pour la taille des halos.
-        final double beatPhase = 1 - (widget.tempoController.pulse - 0.5).abs() * 2;
+        final double beatPhase = 1 - (tempo.pulse - 0.5).abs() * 2;
+        if (isNeon) {
+          // Pas de plus de 0,5 s ignoré (onglet masqué, reprise du ticker) :
+          // la phase reprend là où elle était au lieu de bondir.
+          final double now = tempo.elapsedSeconds;
+          final double dt = now - (_neonClock ?? now);
+          if (dt > 0 && dt < 0.5) _neonPhase += dt * windowNeonSpeed(tempo.bpm);
+          _neonClock = now;
+        }
 
-        // Couche shader seule (grésillement/buée/pluie pour le Neon avec
-        // photo, ou rendu inchangé — dégradé + particules — pour tout le
+        // Couche shader seule (zones/buée/pluie pour "Behind the
+        // window", ou rendu inchangé — dégradé + particules — pour tout le
         // reste) : `paintGradientBlobs` retire le fond opaque/halos habituels
-        // uniquement quand une photo va être dessinée juste en-dessous.
+        // uniquement quand un fond va être dessiné juste en-dessous.
         final Widget shaderOverlay = CustomPaint(
           key: _paintKey,
           painter: _FluidPainter(
@@ -313,8 +353,8 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
             drift: _driftController.value,
             beatPhase: beatPhase,
             shader: (particleStyle == null) ? null : _shader,
-            shaderTime: widget.tempoController.elapsedSeconds,
-            shaderTempo: widget.tempoController.bpm,
+            shaderTime: tempo.elapsedSeconds,
+            shaderTempo: tempo.bpm,
             shaderAccentColor: widget.vibe.accentColor,
             shaderStyle: particleStyle ?? 0,
             paintGradientBlobs: !isNeon,
@@ -324,7 +364,11 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
             isSpaceNebula: isSpaceNebula,
             hasCoverPalette: _paletteColors != null,
             coverHidden: !widget.vibe.showCoverImage,
-            backdropImage: _backdropImage,
+            backdropImage: windowBackdrop?.image,
+            blurImage: windowBackdrop?.blurImage,
+            zoneUniforms: windowBackdrop?.zoneUniforms ?? kNoWindowZoneUniforms,
+            neonPhase: isNeon ? _neonPhase : 0,
+            neonDrive: isNeon ? windowNeonDrive(tempo.bassLevel, tempo.pulse) : 0,
             dummySamplerImage: _dummySamplerImage,
           ),
           child: widget.child,
@@ -332,31 +376,15 @@ class _FluidBackgroundState extends State<FluidBackground> with SingleTickerProv
 
         if (!isNeon) return shaderOverlay;
 
-        // Vibe Neon : Couche 1 (photo, ou aplat nocturne tant qu'aucun
-        // fichier n'est fourni) sous la Couche 2 (shaderOverlay ci-dessus,
-        // buée/pluie/grésillement en semi-transparence).
+        // Vibe "Behind the window" : Couche 1 = l'image importée (la même
+        // ui.Image que le sampler du shader : un seul décodage), sur l'aplat
+        // nocturne qui reste seul sans image, pendant le décodage ou après un
+        // échec ; Couche 2 = shaderOverlay ci-dessus (buée/pluie/zones).
         return Stack(
           fit: StackFit.expand,
           children: [
-            if (_cityImageAvailable)
-              Image.asset(
-                kCyberpunkCityImage,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  // Fichier absent de assets/images/ pour l'instant (voir
-                  // pubspec.yaml) — repli silencieux sur un aplat nocturne,
-                  // sans erreur visible ; se corrige tout seul dès que
-                  // cyberpunk_city_1.png est ajouté et l'app reconstruite.
-                  // `addPostFrameCallback` : ne jamais appeler `setState`
-                  // pendant la construction du frame qui a produit l'erreur.
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted && _cityImageAvailable) setState(() => _cityImageAvailable = false);
-                  });
-                  return const ColoredBox(color: Color(0xFF050D1A));
-                },
-              )
-            else
-              const ColoredBox(color: Color(0xFF050D1A)),
+            const ColoredBox(color: Color(0xFF050D1A)),
+            if (windowBackdrop != null) RawImage(image: windowBackdrop.image, fit: BoxFit.cover),
             shaderOverlay,
           ],
         );
@@ -415,6 +443,10 @@ class _FluidPainter extends CustomPainter {
     required this.hasCoverPalette,
     required this.coverHidden,
     required this.backdropImage,
+    required this.blurImage,
+    required this.zoneUniforms,
+    required this.neonPhase,
+    required this.neonDrive,
     required this.dummySamplerImage,
   });
 
@@ -426,9 +458,9 @@ class _FluidPainter extends CustomPainter {
   final double shaderTempo;
   final Color shaderAccentColor;
   final int shaderStyle;
-  // false pour la Vibe Neon avec photo (Couche 1 déjà dessinée juste
-  // en-dessous) : ce painter ne doit alors tracer QUE le shader
-  // (grésillement/buée/pluie), jamais le fond opaque + halos habituels.
+  // false pour "Behind the window" (Couche 1 déjà dessinée juste en-dessous) : ce
+  // painter ne doit alors tracer QUE le shader (zones/buée/pluie), jamais le
+  // fond opaque + halos habituels.
   final bool paintGradientBlobs;
   // Choix de rendu quand [paintGradientBlobs] est vrai — voir [VibeCustomEffect].
   final VibeCustomEffect effect;
@@ -449,11 +481,19 @@ class _FluidPainter extends CustomPainter {
   // plus haut/réduit pour ne jamais chevaucher le bloc Titre/Artiste
   // remonté dans la Column du Player (retest QA, "Polish & Final UI Fixes").
   final bool coverHidden;
-  // Vibe Neon (styleIndex 0) uniquement : texture échantillonnée par le
-  // shader lui-même pour la réfraction des gouttes et la détection des
-  // zones néon (uBackdrop) — voir vibe_particles.frag. `dummySamplerImage`
-  // sert de sampler de repli tant que `backdropImage` n'est pas prêt.
+  // "Behind the window" (styleIndex 0) uniquement : image importée (uBackdrop, pour la
+  // réfraction des gouttes et les zones) et sa miniature floue
+  // (uBackdropBlur, pour la buée) — voir vibe_particles.frag.
+  // `dummySamplerImage` remplace l'une comme l'autre tant qu'elles ne sont pas
+  // prêtes, et pour tous les autres presets.
   final ui.Image? backdropImage;
+  final ui.Image? blurImage;
+  // 48 valeurs (voir windowZoneUniforms), toutes nulles hors Neon avec image.
+  final List<double> zoneUniforms;
+  // "Behind the window" uniquement (0 sinon) : temps intégré et intensité du
+  // scintillement des zones (uNeonPhase, uNeonDrive).
+  final double neonPhase;
+  final double neonDrive;
   final ui.Image? dummySamplerImage;
   // Space uniquement — voir [_paintNebula].
   final ui.FragmentShader? nebulaShader;
@@ -490,14 +530,15 @@ class _FluidPainter extends CustomPainter {
       }
     }
 
-    // `setImageSampler` exige une image non nulle même quand la texture Neon
-    // n'est pas prête : le sampler factice transparent tient lieu de repli,
-    // et `uBackdropReady` (dernier float) indique au shader s'il peut s'y
-    // fier — sans lui, on saute purement et simplement ce paint plutôt que
-    // de dessiner sans sampler valide.
+    // `setImageSampler` exige une image non nulle même quand les textures
+    // Neon ne sont pas prêtes : le sampler factice transparent tient lieu de
+    // repli pour les deux, et `uBackdropReady` (float 10) indique au shader
+    // s'il peut s'y fier — sans lui, on saute purement et simplement ce paint
+    // plutôt que de dessiner sans sampler valide.
     final ui.Image? sampler = backdropImage ?? dummySamplerImage;
+    final ui.Image? blurSampler = blurImage ?? dummySamplerImage;
     final ui.FragmentShader? activeShader = shader;
-    if (activeShader != null && sampler != null && size.width > 0 && size.height > 0) {
+    if (activeShader != null && sampler != null && blurSampler != null && size.width > 0 && size.height > 0) {
       final ui.Image backdrop = backdropImage ?? sampler;
       activeShader
         ..setFloat(0, shaderTime)
@@ -512,7 +553,19 @@ class _FluidPainter extends CustomPainter {
         ..setFloat(9, backdrop.height.toDouble())
         ..setFloat(10, backdropImage != null ? 1.0 : 0.0)
         ..setFloat(11, coverHidden ? 1.0 : 0.0)
-        ..setImageSampler(0, sampler);
+        ..setFloat(12, neonPhase)
+        ..setFloat(13, neonDrive);
+      // uZoneShape[6] puis uZoneColor[6] : 48 floats consécutifs (14..61).
+      for (int i = 0; i < zoneUniforms.length; i++) {
+        activeShader.setFloat(14 + i, zoneUniforms[i]);
+      }
+      // Bilinéaire pour l'image (agrandie quand la borne de 2048 px est plus
+      // petite que l'écran) et surtout pour la miniature, dont les texels
+      // deviendraient sinon des pavés de ~20 px. Le sampler factice garde le
+      // filtrage par défaut : il n'est jamais lu.
+      activeShader
+        ..setImageSampler(0, sampler, filterQuality: backdropImage != null ? FilterQuality.low : FilterQuality.none)
+        ..setImageSampler(1, blurSampler, filterQuality: blurImage != null ? FilterQuality.low : FilterQuality.none);
       canvas.drawRect(Offset.zero & size, Paint()..shader = activeShader);
     }
   }
@@ -713,6 +766,10 @@ class _FluidPainter extends CustomPainter {
         oldDelegate.hasCoverPalette != hasCoverPalette ||
         oldDelegate.coverHidden != coverHidden ||
         oldDelegate.backdropImage != backdropImage ||
+        oldDelegate.blurImage != blurImage ||
+        oldDelegate.zoneUniforms != zoneUniforms ||
+        oldDelegate.neonPhase != neonPhase ||
+        oldDelegate.neonDrive != neonDrive ||
         oldDelegate.dummySamplerImage != dummySamplerImage;
   }
 }

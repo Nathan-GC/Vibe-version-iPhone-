@@ -62,7 +62,8 @@ class _AnimatedVibeThemeState extends AnimatedWidgetBaseState<AnimatedVibeTheme>
       a.effect != b.effect ||
       a.showCoverImage != b.showCoverImage ||
       a.backgroundImagePath != b.backgroundImagePath ||
-      a.customBackgroundVideoPath != b.customBackgroundVideoPath;
+      a.customBackgroundVideoPath != b.customBackgroundVideoPath ||
+      a.windowImagePath != b.windowImagePath;
 
   @override
   Widget build(BuildContext context) {
@@ -103,6 +104,9 @@ class _VibeVisualTween extends Tween<VibeVisual> {
       // `true` (défaut du constructeur) pendant toute transition — une
       // pochette masquée réapparaissait brièvement à chaque changement.
       showCoverImage: t < 0.5 ? a.showCoverImage : b.showCoverImage,
+      // Même piège : oublié, l'image "Behind the window" disparaîtrait à
+      // chaque frame interpolée (retombée sur null) puis réapparaîtrait.
+      windowImagePath: t < 0.5 ? a.windowImagePath : b.windowImagePath,
     );
   }
 }

@@ -108,13 +108,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
-  # Vibe Neon : photo de fond de skyline cyberpunk (cyberpunk_city_1.png,
-  # voir FluidBackground/kCyberpunkCityImage) sous le shader vitre/pluie.
-  # Dossier déclaré même vide : `flutter pub get`/build acceptent un
-  # répertoire sans fichiers, et FluidBackground se replie sur un aplat
-  # nocturne tant qu'aucune image n'y est déposée (voir son `errorBuilder`).
   assets:
-    - assets/images/
     # Police Outfit (SIL OFL 1.1, licence dans OFL.txt) — chargée localement
     # par google_fonts, téléchargement au lancement désactivé (main.dart).
     - assets/fonts/

@@ -45,6 +45,34 @@ class TrackRepository {
     return (_db.select(_db.tracks)..where((t) => t.id.equals(trackId))).getSingleOrNull();
   }
 
+  /// Enveloppe des basses déjà calculée pour ce morceau, ou null s'il n'a pas
+  /// encore été analysé (voir [saveAudioAnalysis]).
+  Future<Uint8List?> bassEnvelopeFor(String trackId) async {
+    final TrackBassEnvelope? row =
+        await (_db.select(_db.trackBassEnvelopes)..where((t) => t.trackId.equals(trackId))).getSingleOrNull();
+    return row?.envelope;
+  }
+
+  /// Enregistre l'analyse hors ligne d'un morceau : enveloppe des basses
+  /// (remplacée si elle existait) et BPM estimé (null efface l'ancienne
+  /// estimation). La même transaction purge les enveloppes dont le morceau a
+  /// disparu : `track_bass_envelopes` n'a pas de clé étrangère (voir la table),
+  /// la suppression d'un morceau ne la nettoie donc pas — cette purge, une
+  /// seule requête à chaque analyse, suffit à la garder bornée.
+  Future<void> saveAudioAnalysis(String trackId, {required Uint8List envelope, int? estimatedBpm}) {
+    return _db.transaction(() async {
+      await _db
+          .into(_db.trackBassEnvelopes)
+          .insertOnConflictUpdate(TrackBassEnvelopesCompanion.insert(trackId: trackId, envelope: envelope));
+      await (_db.update(_db.tracks)..where((t) => t.id.equals(trackId)))
+          .write(TracksCompanion(estimatedBpm: Value(estimatedBpm)));
+      await _db.customUpdate(
+        'DELETE FROM track_bass_envelopes WHERE track_id NOT IN (SELECT id FROM tracks)',
+        updates: {_db.trackBassEnvelopes},
+      );
+    });
+  }
+
   /// Lecture directe de la base, à jour de toutes les écritures déjà
   /// attendues — contrairement à `libraryTracksProvider.future`, qui renvoie
   /// la dernière émission du flux Drift, émise de façon asynchrone APRÈS

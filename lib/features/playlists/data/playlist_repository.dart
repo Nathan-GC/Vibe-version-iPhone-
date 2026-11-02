@@ -118,4 +118,9 @@ abstract class PlaylistRepository {
   /// Visibilité de la pochette dans le Player — exposé dans
   /// VibeCustomizerScreen pour toutes les Vibes.
   Future<void> updateShowCoverImage(String playlistId, bool showCoverImage);
+
+  /// Image de la Vibe "Behind the window" (preset `neon`). [path] vide la
+  /// retire. N'écrit QUE cette colonne : la Vibe personnalisée garde la sienne
+  /// (`customBackgroundImagePath`) et le style de la playlist ne change pas.
+  Future<void> updateWindowBackgroundImagePath(String playlistId, String path);
 }

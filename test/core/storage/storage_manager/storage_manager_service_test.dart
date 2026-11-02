@@ -67,6 +67,19 @@ void main() {
     expect(image.existsSync(), isTrue);
   });
 
+  test('window image goes to window_backgrounds and never touches the custom Vibe image of the playlist', () async {
+    final File custom = seed('vibe_backgrounds', 'pl_111.jpg');
+    final File old = seed('window_backgrounds', 'pl_222.jpg');
+    final File source = File(p.join(root.path, 'w.jpg'))..writeAsStringSync('w');
+
+    final File imported = await service.importWindowBackgroundImage(source, 'pl');
+
+    expect(p.basename(p.dirname(imported.path)), 'window_backgrounds');
+    expect(imported.existsSync(), isTrue);
+    expect(old.existsSync(), isFalse);
+    expect(custom.existsSync(), isTrue);
+  });
+
   test('two successive imports leave a single file with a new path', () async {
     final File source = File(p.join(root.path, 'c.png'))..writeAsStringSync('x');
     final File first = await service.importPlaylistCoverImage(source, 'pl');

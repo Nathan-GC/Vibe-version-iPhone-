@@ -9,7 +9,6 @@ import '../../../core/theme/design_system/app_spacing.dart';
 const String _editor = 'Nathan Gillot';
 const String _editorAddress = '22370';
 const String _contactEmail = AppConstants.contactEmail;
-const String _backgroundImageCredit = '[Auteur, source et licence de l\'image de fond Neon (cyberpunk_city_1.png)]';
 
 /// Paramètres > Légal : textes juridiques de l'application, en lecture seule.
 /// Les licences des dépendances viennent de `showLicensePage` (Flutter les
@@ -184,7 +183,6 @@ Les fichiers d'origine restés ailleurs sur l'appareil et les playlists exporté
         'Crédits',
         Icons.palette_outlined,
         '''• Police Outfit : SIL Open Font License 1.1, intégrée à l'application (texte de la licence dans « Licences open source »).
-• Image de fond de la Vibe Neon : $_backgroundImageCredit.
 • Métadonnées : Apple iTunes Search API ; MusicBrainz (données principales CC0, genres issus des tags MusicBrainz sous licence CC BY-NC-SA 3.0, musicbrainz.org).
 • Pochettes : Apple ; Cover Art Archive (coverartarchive.org), chaque image restant la propriété de ses ayants droit.
 • Analyse des fichiers audio (silences, métadonnées) : FFmpeg (LGPL 3.0), via ffmpeg-kit.''',

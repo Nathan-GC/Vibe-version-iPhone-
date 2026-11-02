@@ -28,6 +28,25 @@ void main() {
     expect(vibe.customBackgroundVideoPath, isNull);
   });
 
+  test('the window image only surfaces on neon, as windowImagePath and never as backgroundImagePath', () async {
+    const String path = '/music/window_backgrounds/p1_1.jpg';
+    final Playlist neon = await insertPlaylist(PlaylistsCompanion.insert(
+        id: 'n', title: 'N', vibeStyle: const Value(VibePreset.neon), windowBackgroundImagePath: const Value(path)));
+    final Playlist empty = await insertPlaylist(
+        PlaylistsCompanion.insert(id: 'e', title: 'E', vibeStyle: const Value(VibePreset.neon)));
+    final Playlist other = await insertPlaylist(PlaylistsCompanion.insert(
+        id: 'o', title: 'O', vibeStyle: const Value(VibePreset.minimal), windowBackgroundImagePath: const Value(path)));
+    final Playlist custom = await insertPlaylist(PlaylistsCompanion.insert(
+        id: 'c', title: 'C', vibeStyle: const Value(VibePreset.custom), windowBackgroundImagePath: const Value(path)));
+
+    expect(neon.resolvedVibe.windowImagePath, path);
+    expect(neon.resolvedVibe.backgroundImagePath, isNull);
+    expect(empty.resolvedVibe.windowImagePath, isNull);
+    expect(other.resolvedVibe.windowImagePath, isNull);
+    expect(custom.resolvedVibe.windowImagePath, isNull);
+    expect(neon.resolvedVibe == empty.resolvedVibe, isFalse);
+  });
+
   test('a custom preset resolves its stored effect (Section 4.2)', () async {
     final Playlist playlist = await insertPlaylist(
       PlaylistsCompanion.insert(

@@ -38,6 +38,7 @@ Playlist _playlist(String id, {required VibePreset preset, String accentHex = ''
       vibeStyle: preset,
       bgColors: bgColors,
       customBackgroundImagePath: '',
+      windowBackgroundImagePath: '',
       customAccentColor: accentHex,
       coverImagePath: '',
       createdAt: DateTime(2026),

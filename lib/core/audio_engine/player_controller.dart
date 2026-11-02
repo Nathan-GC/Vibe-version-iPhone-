@@ -342,7 +342,7 @@ class PlayerController extends _$PlayerController {
       // "Aucune lecture" tout ce temps — le listener de `playerStateStream`
       // ci-dessus se tait lui aussi tant que `currentTrack == null` — jusqu'à
       // ce qu'un tap manuel force une resynchronisation. Bug réel observé lors
-      // d'un retest QA (Vibe Neon "sans effet" au premier lancement d'une
+      // d'un retest QA (Vibe Behind the window "sans effet" au premier lancement d'une
       // playlist après ouverture de l'app).
       state = state.copyWith(
         status: autoplay ? PlaybackStatus.playing : PlaybackStatus.paused,

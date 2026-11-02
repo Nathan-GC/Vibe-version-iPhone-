@@ -22,14 +22,14 @@ Ce document sert de référence contextuelle et technique pour l'application mob
 
 ### ARCHITECTURE DU VIBE ENGINE (PRESETS SHADERS & STACK)
 
-1. **Preset Neon / Cyberpunk (Inspiration Blade Runner) :**
+1. **Preset Behind the window (vitre pluvieuse, valeur stockée `neon`) :**
    * **Structure Stack :**
-     * *Couche 1 (Fond) :* Image HD ou vidéo locale (.mp4) verticalement alignée.
+     * *Couche 1 (Fond) :* Image importée par l'utilisateur depuis sa galerie (par playlist), décodée à la taille de l'écran ; aplat nuit sans image.
      * *Couche 2 (Overlay GLSL) :* Shader `vibe_particles.frag` en semi-transparence.
      * *Couche 3 (UI) :* Contrôles du lecteur intégrés dans un `PageView` doté d'une `GlobalKey` pour préserver le sous-arbre visuel lors des bascules d'arrière-plan et d'onglets.
    * **Physique de la pluie :** Gouttes elliptiques à réfraction convexe (échantillonnage décalé de la texture `uBackdrop`), reflet spéculaire supérieur et ombre portée basse.
-   * **Grésillement des Néons :** Isolation des enseignes lumineuses et scintillation bidirectionnelle calée sur le pulse BPM (`u_tempo`).
-   * **Respiration globale :** Modulation sinusoïdale lente (`sin(u_time * 0.5)`) de l'ombrage global (7% max, période de ~12,5s).
+   * **Néons dans le brouillard :** Zones colorées détectées hors ligne (`window_color_zones.dart`) dont le centre respire et les contours diffusent la couleur ; intensité = basses du morceau (analyse FFmpeg hors ligne), vitesse ∝ BPM (tag ou estimé).
+   * **Buée des bords :** Flou léger (miniature 48 px) qui avance vers le centre puis se retire, période ~11 s.
 
 2. **Effets et Personnalisation Vibe Personnalisée :**
    * **Saisie Hexadécimale (`#HEX`) :** Champ de saisie directe pour appliquer n'importe quelle teinte personnalisée.

@@ -16,12 +16,21 @@ void main() {
   });
   tearDown(() => dir.deleteSync(recursive: true));
 
+  /// Retire ce que la v21 ajoute (image "Behind the window", BPM estimé,
+  /// table des enveloppes de basses).
+  Future<void> dropV21Columns(AppDatabase legacy) async {
+    await legacy.customStatement('ALTER TABLE playlists DROP COLUMN window_background_image_path');
+    await legacy.customStatement('DROP TABLE track_bass_envelopes');
+    await legacy.customStatement('ALTER TABLE tracks DROP COLUMN estimated_bpm');
+  }
+
   /// Les bases "héritées" des tests sont créées au schéma courant : on leur
   /// retire les colonnes ajoutées en v19 pour que la migration puisse les
   /// recréer (sinon `ADD COLUMN` échoue sur une colonne déjà présente).
   Future<void> dropV19Columns(AppDatabase legacy) async {
     await legacy.customStatement('ALTER TABLE playlists DROP COLUMN carousel_position');
     await legacy.customStatement('ALTER TABLE playlist_tracks DROP COLUMN added_since_save');
+    await dropV21Columns(legacy);
   }
 
   test('upgrading from v12 keeps what users saw and remaps the retired forced-done status', () async {
@@ -258,6 +267,7 @@ void main() {
     }
     await legacy.into(legacy.playlistMissingTracks).insert(PlaylistMissingTracksCompanion.insert(
         playlistId: 'ok', position: 1, title: 'Ghost2', artist: 'G', sanitizedKey: 'k2', matchKey: 'm2'));
+    await dropV21Columns(legacy);
     await legacy.customStatement('PRAGMA user_version = 19');
     await legacy.close();
 
@@ -276,5 +286,27 @@ void main() {
     // Ordre : a(0,rowid1) b(0,rowid2) | grisé(1) vs c(1) -> principale d'abord | d(5).
     expect(await merged('dup'), [('a', 0), ('b', 1), ('c', 2), ('ghost:Ghost', 3), ('d', 4)]);
     expect(await merged('ok'), [('a', 0), ('ghost:Ghost2', 1), ('e', 3)]);
+  });
+
+  test('upgrading from v20 adds the window image path and the audio-analysis columns, existing rows keep their data',
+      () async {
+    final AppDatabase legacy = AppDatabase.forTesting(NativeDatabase(dbFile));
+    await legacy.into(legacy.playlists).insert(PlaylistsCompanion.insert(id: 'p', title: 'Mix'));
+    await legacy.into(legacy.tracks).insert(TracksCompanion.insert(
+        id: 't1', title: 'Kept', album: '', artists: const ['A'], durationSeconds: 180, filePath: '/m/t1.mp3'));
+    await dropV21Columns(legacy);
+    await legacy.customStatement('PRAGMA user_version = 20');
+    await legacy.close();
+
+    final AppDatabase upgraded = AppDatabase.forTesting(NativeDatabase(dbFile));
+    addTearDown(upgraded.close);
+
+    final Playlist playlist = await upgraded.select(upgraded.playlists).getSingle();
+    expect(playlist.title, 'Mix');
+    expect(playlist.windowBackgroundImagePath, '');
+    final Track track = await upgraded.select(upgraded.tracks).getSingle();
+    expect(track.title, 'Kept');
+    expect(track.estimatedBpm, equals(null));
+    expect(await upgraded.select(upgraded.trackBassEnvelopes).get(), isEmpty);
   });
 }

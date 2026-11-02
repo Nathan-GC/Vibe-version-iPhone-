@@ -264,6 +264,12 @@ class DriftPlaylistRepository implements PlaylistRepository {
   }
 
   @override
+  Future<void> updateWindowBackgroundImagePath(String playlistId, String path) {
+    return (_db.update(_db.playlists)..where((p) => p.id.equals(playlistId)))
+        .write(PlaylistsCompanion(windowBackgroundImagePath: Value(path)));
+  }
+
+  @override
   Future<void> renamePlaylist(String playlistId, String title) {
     return (_db.update(_db.playlists)..where((p) => p.id.equals(playlistId)))
         .write(PlaylistsCompanion(title: Value(title)));

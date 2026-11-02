@@ -8,6 +8,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/animation/tempo_sync/tempo_sync_controller.dart';
+import '../../../core/audio_analysis/bass_analysis.dart';
+import '../../../core/audio_analysis/track_audio_analysis_provider.dart';
 import '../../../core/audio_engine/player_controller.dart';
 import '../../../core/audio_engine/player_immersive_mode_provider.dart';
 import '../../../core/navigation/shell_route_visibility.dart';
@@ -61,6 +63,10 @@ class _MasterPlayerScreenState extends ConsumerState<MasterPlayerScreen> with Si
   // FluidBackground.coverKey).
   final GlobalKey _coverKey = GlobalKey();
 
+  // Dernière position annoncée par le lecteur : permet de resynchroniser le
+  // contrôleur de tempo quand seul l'état lecture/pause change.
+  Duration _lastPosition = Duration.zero;
+
   @override
   void initState() {
     super.initState();
@@ -71,6 +77,14 @@ class _MasterPlayerScreenState extends ConsumerState<MasterPlayerScreen> with Si
   void dispose() {
     _tempoController.dispose();
     super.dispose();
+  }
+
+  void _syncTempoPosition(Duration position) {
+    _lastPosition = position;
+    _tempoController.syncPosition(
+      position,
+      playing: ref.read(playerControllerProvider).status == PlaybackStatus.playing,
+    );
   }
 
   @override
@@ -94,11 +108,18 @@ class _MasterPlayerScreenState extends ConsumerState<MasterPlayerScreen> with Si
       if (previousPlaylistId != null && next.currentPlaylistId != previousPlaylistId) {
         PaintingBinding.instance.imageCache.clear();
       }
+      // Pause/reprise sans nouvel événement de position : le niveau des basses
+      // doit retomber (ou repartir) tout de suite.
+      if (previous?.status != next.status) _syncTempoPosition(_lastPosition);
     });
 
-    // Continuité des Vibes : le ticker tourne en permanence (démarré dans
-    // initState), lecture en pause comprise — seul le BPM suit la piste.
-    _tempoController.updateBpm((player.currentTrack?.bpm ?? 120).toDouble());
+    // Position du lecteur vers le contrôleur de tempo (niveau des basses). `listen`
+    // et non `watch` : la position change plusieurs fois par seconde, elle ne
+    // doit jamais reconstruire l'écran.
+    ref.listen<AsyncValue<Duration>>(positionStreamProvider, (previous, next) {
+      final Duration? position = next.value;
+      if (position != null) _syncTempoPosition(position);
+    });
 
     final String? playlistId = player.currentPlaylistId;
     final AsyncValue<Playlist?> playlistAsync =
@@ -133,6 +154,24 @@ class _MasterPlayerScreenState extends ConsumerState<MasterPlayerScreen> with Si
     final VibeVisual vibe = playlist?.resolvedVibe ?? defaultVibeFor(ref.watch(userAccentColorProvider));
 
     final Track? track = player.currentTrack;
+
+    // Continuité des Vibes : le ticker tourne en permanence (démarré dans
+    // initState), lecture en pause comprise — seul le BPM suit la piste.
+    //
+    // "Behind the window" : l'analyse hors ligne du morceau (enveloppe des basses
+    // + BPM estimé) n'est observée que sous cette Vibe, pour qu'aucune autre ne
+    // déclenche de calcul FFmpeg. Tant qu'elle n'est pas prête (ou en échec),
+    // l'enveloppe est nulle et l'effet retombe sur la pulsation du tempo.
+    final Track? neonTrack = vibe.preset == VibePreset.neon ? track : null;
+    final TrackAudioAnalysis? analysis =
+        neonTrack == null ? null : ref.watch(trackAudioAnalysisProvider(neonTrack.id)).value;
+    _tempoController.setBassEnvelope(analysis?.envelope);
+    _tempoController.updateBpm(
+      neonTrack == null
+          ? (track?.bpm ?? 120).toDouble()
+          : effectiveBpm(neonTrack.bpm, analysis?.estimatedBpm ?? neonTrack.estimatedBpm),
+    );
+
     final String? playlistCoverImagePath = playlist?.coverImagePath;
     // Section 3.2 : même repli pochette->playlist que MasterPlayerScreen
     // utilise déjà pour AlbumArtReactive, réutilisé ici pour l'extraction de
@@ -227,7 +266,7 @@ const SystemUiOverlayStyle _kDarkStatusBarIcons = SystemUiOverlayStyle(
   statusBarBrightness: Brightness.light,
 );
 
-/// Space/New OLED (noir pur) et Neon (photo nocturne) sont toujours sombres ;
+/// Space/New OLED (noir pur) et Behind the window (image nocturne) sont toujours sombres ;
 /// les autres Vibes sont jugées sur la moyenne de leurs couleurs de fond,
 /// composées sur [underlay] (le fond du Scaffold, visible sous les couleurs
 /// semi-transparentes de Glassmorphism par exemple).

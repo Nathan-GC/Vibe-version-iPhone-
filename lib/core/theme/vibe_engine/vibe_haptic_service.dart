@@ -35,7 +35,7 @@ class VibeHapticService {
         // visuellement (voir la palette braises/sombre de vibe_engine.dart).
         HapticFeedback.heavyImpact();
       case VibePreset.neon:
-        // Cyberpunk/Synthwave : double-tap sec.
+        // "Behind the window" (neon) : double-tap sec.
         HapticFeedback.mediumImpact();
         Future.delayed(const Duration(milliseconds: 90), HapticFeedback.mediumImpact);
       case VibePreset.organic:

@@ -33,6 +33,7 @@ Playlist _playlist({required String accentHex}) => Playlist(
       vibeStyle: VibePreset.custom,
       bgColors: const ['FF101020', 'FF202040'],
       customBackgroundImagePath: '',
+      windowBackgroundImagePath: '',
       customAccentColor: accentHex,
       coverImagePath: '',
       createdAt: DateTime(2026),
