@@ -85,7 +85,7 @@ Future<void> main() async {
   await AudioService.init(
     builder: () => PlaylistAudioHandler(container),
     config: const AudioServiceConfig(
-      androidNotificationChannelId: 'com.example.playlist_app.channel.audio',
+      androidNotificationChannelId: 'com.vibeplayer.app.channel.audio',
       androidNotificationChannelName: 'Lecture audio',
       androidNotificationOngoing: true,
       notificationColor: Color(0xFF673AB7),

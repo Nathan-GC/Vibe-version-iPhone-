@@ -34,3 +34,9 @@ windows/
 
 # graphify (graphe de connaissances local, régénérable)
 graphify-out/
+
+# Clés de signature release : ne jamais versionner (voir android/app/build.gradle.kts).
+key.properties
+**/key.properties
+*.jks
+*.keystore
