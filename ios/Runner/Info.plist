@@ -53,15 +53,15 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 
-	<!-- image_picker (pochettes, fonds de Vibe image/vidéo). La galerie passe par
-	     PHPicker, sans demande d'autorisation ; les clés caméra/micro sont exigées
-	     par l'App Store dès que le plugin est lié, même si l'app ne s'en sert pas. -->
+	<!-- image_picker (pochettes, fonds de Vibe image/vidéo) : uniquement la galerie,
+	     via PHPicker, sans demande d'autorisation. Aucune clé caméra/micro : l'app
+	     n'utilise ni l'un ni l'autre (ImageSource.camera n'est jamais appelé), et
+	     une description d'usage inexistant contredirait la politique de confidentialité.
+	     Si l'envoi à App Store Connect est refusé (ITMS-90683, clé exigée parce que
+	     le plugin référence l'API caméra), remettre les clés avec un texte exact
+	     plutôt qu'un usage inventé. -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Vibe accède à tes photos et vidéos pour personnaliser le fond d'une Vibe, la pochette d'une playlist ou celle d'un morceau.</string>
-	<key>NSCameraUsageDescription</key>
-	<string>Vibe peut utiliser l'appareil photo pour créer une pochette ou un fond de Vibe.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Vibe peut utiliser le micro lors de l'enregistrement d'une vidéo de fond de Vibe.</string>
 
 	<!-- Réseau : HTTPS uniquement (iTunes, MusicBrainz, Cover Art Archive, pochettes) — chiffrement exempté. -->
 	<key>ITSAppUsesNonExemptEncryption</key>

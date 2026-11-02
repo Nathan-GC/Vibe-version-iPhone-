@@ -124,8 +124,9 @@ MetaBrainz (MusicBrainz, Cover Art Archive) : metabrainz.org/privacy
 Spotify : spotify.com/legal/privacy-policy
 La police d'affichage est intégrée à l'application : aucun service de polices n'est contacté.
 
-4. Base légale et droit d'opposition
-Ces envois sont nécessaires au fonctionnement des fonctions que vous utilisez (exécution du service). L'enrichissement automatique repose sur l'intérêt légitime à présenter une bibliothèque complète ; vous pouvez vous y opposer à tout moment avec le réglage « Enrichissement automatique à l'importation ».
+4. Base légale et transferts hors de l'Union européenne
+L'enrichissement automatique (Apple, puis MusicBrainz en repli) repose sur votre consentement explicite, demandé au premier lancement. Vous pouvez le retirer à tout moment avec le réglage « Enrichissement automatique à l'importation » (Paramètres > Confidentialité) ; le retrait ne remet pas en cause les envois déjà faits. Les autres envois (recherche, découverte, import Spotify) n'ont lieu que lorsque vous utilisez la fonction concernée, à votre demande.
+Apple (Apple Inc.) et la MetaBrainz Foundation (MusicBrainz, Cover Art Archive) sont établis aux États-Unis : les requêtes qui leur sont envoyées (titre, artiste ou recherche, et votre adresse IP) peuvent donc être traitées hors de l'Union européenne. Ces transferts reposent sur les garanties décrites par chacun de ces services dans sa politique de confidentialité (notamment le cadre de protection des données UE–États-Unis, pour les organisations qui y adhèrent).
 
 $_permissions
 

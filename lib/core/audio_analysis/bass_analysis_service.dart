@@ -6,12 +6,15 @@ import 'package:ffmpeg_kit_flutter_new_min/return_code.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'bass_analysis.dart';
+import 'ffmpeg_statistics.dart';
 
 /// Lance une commande FFmpeg et dit si elle a réussi. Injectable pour tester le
 /// service sans FFmpeg (indisponible hors device).
 typedef FfmpegRunner = Future<bool> Function(String command);
 
 Future<bool> _runWithFfmpegKit(String command) async {
+  // Avant toute exécution réelle : évite le flot de statistiques vers l'UI.
+  await ensureFfmpegStatisticsDisabled();
   final session = await FFmpegKit.execute(command);
   final returnCode = await session.getReturnCode();
   return returnCode != null && ReturnCode.isSuccess(returnCode);
@@ -33,9 +36,12 @@ class BassAnalysisService {
   /// Null (sans exception) si le fichier est absent, si FFmpeg échoue ou ne
   /// produit rien : l'effet retombe alors sur la pulsation du tempo.
   Future<({Uint8List envelope, int? estimatedBpm})?> analyze(String filePath) async {
-    if (!await File(filePath).exists()) return null;
     // Basename seulement : le chemin complet peut contenir des données personnelles.
     final String name = filePath.split(RegExp(r'[\\/]')).last;
+    if (!await File(filePath).exists()) {
+      debugPrint('[BassAnalysis] Fichier introuvable : $name');
+      return null;
+    }
 
     File? output;
     try {
@@ -70,7 +76,9 @@ class BassAnalysisService {
       // Le canal natif FFmpeg ou le disque peuvent échouer de façons variées :
       // l'analyse est facultative, jamais une raison de planter le lecteur.
       // On journalise type et message, jamais le contenu du fichier.
-      _log('exception ${e.runtimeType}: $e', name);
+      // `$e` (ex. FileSystemException) peut embarquer le chemin complet : on le
+      // remplace par le basename pour ne rien fuiter.
+      _log('exception ${e.runtimeType}: ${'$e'.replaceAll(filePath, name)}', name);
       return null;
     } finally {
       try {

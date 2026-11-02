@@ -99,6 +99,20 @@ void main() {
       expect(logs.single, contains('native channel down'));
     });
 
+    test('logs a missing file with the basename only (AN-04)', () async {
+      await serviceWith(runnerWriting('')).analyze('${dir.path}/absent.mp3');
+      expect(logs, ['[BassAnalysis] Fichier introuvable : absent.mp3']);
+    });
+
+    test('replaces the full path by the basename inside exception messages', () async {
+      await serviceWith((String command) async => throw FileSystemException('cannot read', audio.path))
+          .analyze(audio.path);
+      expect(logs, hasLength(1));
+      expect(logs.single, contains('FileSystemException'));
+      expect(logs.single, contains('song.mp3'));
+      expect(logs.single, isNot(contains(dir.path)));
+    });
+
     test('logs an empty output', () async {
       await serviceWith(runnerWriting('')).analyze(audio.path);
       expect(logs, hasLength(1));

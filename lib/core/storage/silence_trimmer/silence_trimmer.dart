@@ -1,4 +1,5 @@
 import 'package:ffmpeg_kit_flutter_new_min/ffmpeg_kit.dart';
+import 'package:playlist_app/core/audio_analysis/ffmpeg_statistics.dart';
 import 'package:ffmpeg_kit_flutter_new_min/return_code.dart';
 
 class TrimResult {
@@ -43,6 +44,8 @@ class SilenceTrimmerService {
     final double thresholdSec = minSilenceDuration.inMilliseconds / 1000;
     final String command = '-i "$filePath" -af silencedetect=noise=${silenceThresholdDb}dB:d=$thresholdSec -f null -';
 
+    // Même flot de statistiques par trame qu'à l'analyse des basses : on le coupe.
+    await ensureFfmpegStatisticsDisabled();
     final session = await FFmpegKit.execute(command);
     final returnCode = await session.getReturnCode();
     if (returnCode == null || !ReturnCode.isSuccess(returnCode)) {
