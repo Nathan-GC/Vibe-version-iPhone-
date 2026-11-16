@@ -55,8 +55,8 @@ open ios/Runner.xcworkspace
 
 Dans Xcode : cible **Runner** › **Signing & Capabilities** :
 1. Cocher *Automatically manage signing* et choisir sa **Team**.
-2. Remplacer le **Bundle Identifier** `com.example.playlistApp` par un identifiant unique
-   (ex. `com.tondomaine.vibe`) : un identifiant `com.example.*` ne peut pas être publié.
+2. Garder le **Bundle Identifier** `com.vibeplayer.app` (déjà dans le projet depuis
+   1.4.0+4016) : le changer casserait la mise à jour en place.
 3. Vérifier la capacité **Background Modes** : *Audio, AirPlay, and Picture in Picture*
    et *Background fetch* doivent être cochés (ils viennent de `Info.plist`).
 
@@ -102,7 +102,19 @@ flutter build ipa --release
 
 L'archive est dans `build/ios/archive/`, l'IPA dans `build/ios/ipa/` ; l'envoyer avec
 Xcode (Organizer › Distribute App) ou Transporter. Numéro de version : `version:` du
-`pubspec.yaml` (`1.3.1+8`), incrémenter le `+N` à chaque envoi.
+`pubspec.yaml` (`1.4.0+4016`), incrémenter le `+N` à chaque envoi.
+
+### IPA non signée (installation hors Xcode)
+
+Une IPA compilée sans signature (pas de `embedded.mobileprovision`, exécutable `Runner`
+non signé) ne s'installe pas telle quelle : iOS refuse tout binaire non signé. La
+re-signer avec un Apple ID via Sideloadly ou AltStore (profil valable 7 jours avec un
+compte gratuit), ou installer depuis Xcode (étape 5). Elle ne peut pas être envoyée sur
+TestFlight / App Store : il faut une archive signée par une Team payante.
+
+| Version | Fichier archivé | Contrôles (sans Mac ni simulateur) |
+|---|---|---|
+| 1.4.0 (4016) | `Vibe/build/release-1.4.0+4016/ios/Vibe-1.4.0+4016.ipa` (non signée, Xcode 26.6, SDK iOS 26.5) | Bundle `com.vibeplayer.app`, Flutter release AOT, arm64, iOS 15.0+, iPhone uniquement ; `Info.plist` conforme au dépôt ; assets identiques (shaders compilés) ; code 1.4.0 (`Vibe/1.4.0`, `disableStatistics`, `SandboxPathRelocator`) |
 
 ## 7. Recette sur iPhone (points non vérifiables sous Windows)
 

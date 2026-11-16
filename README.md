@@ -11,7 +11,8 @@ Référence fonctionnelle et architecture détaillée :
 
 ## Version iPhone (ce dossier : `Vibe iPhone`)
 
-Déclinaison iOS du même code Flutter (v1.3.1+8, synchronisée avec Vibe Android 1.3.1+8), le dossier `Vibe` (Android) restant
+Déclinaison iOS du même code Flutter (v1.4.0+4016, synchronisée avec Vibe Android 1.4.0+4016 ;
+IPA de cette version archivée dans `Vibe/build/release-1.4.0+4016/ios/`), le dossier `Vibe` (Android) restant
 intact. Toutes les divergences passent par `AppPlatform.isIOS`
 (`lib/core/platform/app_platform.dart`) : sur Android, ce code se comporte
 exactement comme Vibe.
@@ -51,8 +52,10 @@ exactement comme Vibe.
 
 - Nom de base SQLite `playlist_app` (`AppDatabase._openConnection`) : le changer perdrait
   la bibliothèque existante des utilisateurs.
-- Package Android `com.example.playlist_app` et canal de notification
-  `com.example.playlist_app.channel.audio` : les changer casserait la mise à jour en place.
+- Identifiant d'application `com.vibeplayer.app` (Android `applicationId`/`namespace`,
+  iOS `PRODUCT_BUNDLE_IDENTIFIER`, depuis 1.4.0+4016 ; avant : `com.example.playlist_app`)
+  et canal de notification `com.vibeplayer.app.channel.audio` : les changer casserait la
+  mise à jour en place.
 - Valeurs de `VibePreset` stockées en base (`oled` = « Space », `newOled` = « OLED ») :
   rétrocompatibilité des playlists existantes.
 
