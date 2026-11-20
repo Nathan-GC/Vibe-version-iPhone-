@@ -23,7 +23,8 @@ exactement comme Vibe.
   [`docs/IOS_BUILD.md`](docs/IOS_BUILD.md).
 - `flutter analyze` : **0 issue** ; `flutter test` : **216 / 216 verts**
   (187 d'origine + 29 tests des adaptations iOS).
-- Le dossier `ios/` est versionné (voir `.gitignore`), contrairement à Vibe Android.
+- Le dossier `ios/` est versionné ici (voir `.gitignore`) ; `android/` est ignoré ici et
+  versionné dans le dépôt Vibe (Android) depuis 1.4.0+4016.
 
 ---
 
@@ -44,9 +45,9 @@ exactement comme Vibe.
 - Icône adaptative `mipmap-anydpi-v26/ic_launcher.xml` + `ic_launcher_round.xml` :
   fond vectoriel noir pur `#000000` plein cadre 108×108 dp, 5 barres néon `#6A0DAD`
   dans la zone de sécurité de 66 dp, calque `<monochrome>` pour les icônes à thème.
-- ⚠️ Le dossier `android/` est **gitignoré** : Manifest, icônes et code natif n'apparaissent
-  jamais dans `git status`. Les sauvegarder à part avant toute réinstallation du poste.
-  Le code natif versionné vit donc dans des **plugins locaux** (`packages/`), voir ci-dessous.
+- Le dossier `android/` est **ignoré dans ce dépôt** : Manifest, icônes et code natif Android
+  sont versionnés dans le dépôt Vibe (Android) depuis 1.4.0+4016.
+  Le pont natif du mode Focus vit dans un **plugin local** (`packages/`), voir ci-dessous.
 
 ### Identifiants à ne jamais renommer
 
