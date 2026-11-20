@@ -24,10 +24,47 @@ import 'quick_rename_preview_screen.dart';
 class QuickRenameFlow {
   const QuickRenameFlow._();
 
-  /// Texte prêt à coller dans une IA, avec le JSON exporté.
-  static const String aiPrompt = 'Corrige les champs title et artist de chaque titre de ce JSON (orthographe, casse, '
-      'artiste principal, featurings écrits "feat. X" dans artist). Ne modifie rien d\'autre : ni l\'ordre, ni les id, '
-      'ni album, ni les autres clés. Rends uniquement le JSON complet, sans texte autour.';
+  /// Texte prêt à coller dans une IA, avec le JSON exporté. Calé sur les règles
+  /// de [QuickRenameService] : seuls `title`/`artist` comptent, invités
+  /// découpés UNIQUEMENT sur « feat. » (jamais sur `,` `&` `x`, d'où un « feat. »
+  /// par invité), fichier partiel accepté tant que chaque titre garde son `id`,
+  /// mélange avec / sans `id` refusé.
+  static const String aiPrompt = r'''Tu vas corriger les métadonnées d'une bibliothèque musicale exportée en JSON par l'application Vibe.
+
+## Ce que tu dois rendre
+- Le JSON corrigé, et UNIQUEMENT lui : pas de texte avant ou après, pas de balises ```, pas de commentaires.
+- Un JSON strictement valide : guillemets doubles, aucune virgule finale, caractères accentués conservés tels quels.
+
+## Règles absolues (sinon l'application refuse le fichier entier)
+1. Ne modifie QUE les champs "title" et "artist" de chaque titre.
+2. Ne touche jamais à "id", "album", ni aux clés du haut du fichier ("id", "title", "author", "description", "version", "tags", "vibeStyle", "creatorHandle", "originalCreator").
+3. Ne supprime, n'ajoute, ne duplique et ne réordonne aucun titre. Chaque "id" doit rester présent une seule fois, exactement tel quel.
+4. "title" et "artist" ne doivent jamais être vides.
+
+## Comment corriger "title"
+- Mets le vrai titre officiel du morceau, avec sa casse et sa ponctuation officielles (accents compris).
+- Retire le bruit hérité des noms de fichiers : "Official Video", "Official Audio", "Lyrics", "Clip officiel", "HD", "4K", "Audio", numéros de piste en tête ("01 - "), noms de sites ou de convertisseurs, extensions (".mp3"), emojis, tirets ou underscores parasites.
+- Garde les informations qui distinguent une version : "(Remix)", "(Live)", "(Acoustic)", "(Radio Edit)", "(X Remix)", "(Remastered 2011)", etc.
+- Si le titre contient un featuring ("(feat. X)", "ft. X"), retire-le du titre et reporte l'invité dans "artist" (voir plus bas).
+- Si artiste et titre sont manifestement inversés (le titre contient le nom de l'artiste et inversement), remets-les dans le bon champ.
+
+## Comment corriger "artist"
+- Le premier nom est l'artiste principal, avec son orthographe et sa stylisation officielles (ex. "XXXTENTACION", "will.i.am", "AC/DC", "Fred again..").
+- Un artiste dont le nom contient "&", "," ou "x" reste ENTIER, sans changement : "Earth, Wind & Fire", "Mumford & Sons", "Simon & Garfunkel". Ces caractères ne servent JAMAIS à séparer deux artistes.
+- Les invités s'écrivent UNIQUEMENT avec "feat." :
+  - un invité : "Artiste feat. Invité"
+  - plusieurs invités : "Artiste feat. Invité 1 feat. Invité 2" (répète "feat." devant chaque invité ; ne les sépare pas par des virgules ou "&", sinon ils seraient fusionnés en un seul artiste)
+- N'utilise pas "ft.", "featuring", "with" ni "x" pour un invité : uniquement "feat.".
+- Si l'artiste vaut "Unknown" et que tu reconnais le morceau avec certitude, mets le bon artiste ; sinon laisse "Unknown".
+
+## En cas de doute
+- Ne devine pas. Si tu n'es pas sûr d'un titre ou d'un artiste, laisse les deux champs exactement tels quels. Un titre inchangé est ignoré par l'application, alors qu'un titre faux sera renommé.
+- Ne traduis rien et ne « corrige » pas un nom volontairement stylisé.
+
+## Bibliothèque très longue
+Si tu ne peux pas rendre tout le fichier d'un coup, rends le même objet JSON (mêmes clés du haut) avec dans "tracks" UNIQUEMENT les titres que tu as modifiés, chacun avec son "id" d'origine intact. L'application accepte un fichier partiel tant que chaque titre garde son "id". Ne mélange jamais des titres avec "id" et des titres sans "id".
+
+Voici le fichier :''';
 
   static Future<void> run(BuildContext context, WidgetRef ref) async {
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
