@@ -48,6 +48,28 @@ final Provider<MusicBrainzAutoEnricher> musicBrainzAutoEnricherProvider = Provid
   );
 });
 
+/// Demande « one-shot » de lancer « Enrichir tout » dès que la Bibliothèque est
+/// à l'écran (posée par le renommage rapide, option « Réenrichir »). Elle est
+/// posée AVANT la navigation puis consommée par `LibraryScreen` — au montage si
+/// l'écran n'existe pas encore, ou via l'écoute si elle est déjà montée — et
+/// remise à zéro dans la foulée : elle ne se relance donc jamais toute seule.
+class EnrichAllRequestController extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void request() => state = true;
+
+  /// `true` si une demande était en attente (et l'efface).
+  bool consume() {
+    final bool pending = state;
+    if (pending) state = false;
+    return pending;
+  }
+}
+
+final NotifierProvider<EnrichAllRequestController, bool> enrichAllRequestProvider =
+    NotifierProvider<EnrichAllRequestController, bool>(EnrichAllRequestController.new);
+
 /// Morceaux déjà en base, les plus récents en premier.
 final StreamProvider<List<Track>> libraryTracksProvider = StreamProvider<List<Track>>((ref) {
   final AppDatabase db = ref.watch(appDatabaseProvider);

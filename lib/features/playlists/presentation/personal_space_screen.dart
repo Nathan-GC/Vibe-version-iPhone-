@@ -10,6 +10,7 @@ import '../../../core/storage/database/track_repository.dart';
 import '../../../core/theme/design_system/app_spacing.dart';
 import '../../../core/theme/vibe_engine/playlist_vibe_resolver.dart';
 import '../../../core/theme/vibe_engine/vibe_engine.dart';
+import '../../library/presentation/quick_rename/quick_rename_flow.dart';
 import '../data/playlist_providers.dart';
 import '../data/playlist_repository.dart';
 import '../domain/playlist_category.dart';
@@ -291,10 +292,10 @@ class _PlaylistTile extends ConsumerWidget {
 
   final Playlist playlist;
 
-  /// Playlists système : recréées/gérées automatiquement par l'app (voir
+  /// Playlists système : gérées automatiquement par l'app (voir
   /// [kAllImportedPlaylistId], [kLikedPlaylistId]), jamais renommables ni
-  /// supprimables depuis ce menu.
-  bool get _isSystemPlaylist => !PlaylistExportFlow.isExportable(playlist);
+  /// supprimables depuis ce menu. Elles restent exportables.
+  bool get _isSystemPlaylist => playlistCategoryOf(playlist) == PlaylistCategory.auto;
 
   Future<void> _rename(BuildContext context, WidgetRef ref) async {
     final String? title = await showDialog<String>(
@@ -348,33 +349,43 @@ class _PlaylistTile extends ConsumerWidget {
             onPressed: () => context.push('/space/playlist/${playlist.id}/vibe'),
           ),
           // Sélections système ("Titres likés", "Tous les titres importés") :
-          // ni export, ni renommage, ni suppression — menu absent.
-          if (!_isSystemPlaylist)
-            PopupMenuButton<_PlaylistAction>(
-              onSelected: (action) async {
-                switch (action) {
-                  case _PlaylistAction.export:
-                    await PlaylistExportFlow.run(context, ref, playlist);
-                  case _PlaylistAction.rename:
-                    await _rename(context, ref);
-                  case _PlaylistAction.delete:
-                    await _delete(context, ref);
-                }
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem(value: _PlaylistAction.export, child: Text('Exporter en JSON')),
+          // export seul — jamais de renommage ni de suppression de la
+          // playlist. Seule "Tous les titres importés" ajoute le renommage
+          // rapide des titres (import d'un JSON corrigé).
+          PopupMenuButton<_PlaylistAction>(
+            onSelected: (action) async {
+              switch (action) {
+                case _PlaylistAction.export:
+                  await PlaylistExportFlow.run(context, ref, playlist);
+                case _PlaylistAction.quickRename:
+                  await QuickRenameFlow.run(context, ref);
+                case _PlaylistAction.rename:
+                  await _rename(context, ref);
+                case _PlaylistAction.delete:
+                  await _delete(context, ref);
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: _PlaylistAction.export, child: Text('Exporter en JSON')),
+              if (playlist.id == kAllImportedPlaylistId)
+                const PopupMenuItem(
+                  value: _PlaylistAction.quickRename,
+                  child: Text('Renommage rapide (importer un JSON)'),
+                ),
+              if (!_isSystemPlaylist) ...const [
                 PopupMenuDivider(),
                 PopupMenuItem(value: _PlaylistAction.rename, child: Text('Renommer la playlist')),
                 PopupMenuItem(value: _PlaylistAction.delete, child: Text('Supprimer la playlist')),
               ],
-            ),
+            ],
+          ),
         ],
       ),
     );
   }
 }
 
-enum _PlaylistAction { export, rename, delete }
+enum _PlaylistAction { export, quickRename, rename, delete }
 
 enum _AddAction { create, importJson }
 

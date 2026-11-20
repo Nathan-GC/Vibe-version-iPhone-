@@ -274,6 +274,24 @@ void main() {
       expect((await track('a')).toJson(), before.toJson());
       expect(await idsIn(kAllImportedPlaylistId), contains('a'));
     });
+
+    test('a snapshot written before schema v22 (no identityLocked / overwriteOnEnrich keys) still restores', () async {
+      final Track before = await track('a');
+      await blacklist.blacklist([before], reason: BlacklistReason.manual);
+      final BlacklistedTrack entry = await onlyEntry();
+      final Map<String, dynamic> snapshot = jsonDecode(entry.trackSnapshot) as Map<String, dynamic>;
+      (snapshot['track'] as Map<String, dynamic>)
+        ..remove('identityLocked')
+        ..remove('overwriteOnEnrich');
+      await (db.update(db.blacklistedTracks)..where((b) => b.filePath.equals(entry.filePath)))
+          .write(BlacklistedTracksCompanion(trackSnapshot: Value(jsonEncode(snapshot))));
+
+      expect(await blacklist.restore(await onlyEntry()), RestoreOutcome.restored);
+
+      final Track restored = await track('a');
+      expect(restored.identityLocked, isFalse);
+      expect(restored.overwriteOnEnrich, isFalse);
+    });
   });
 
   group('P2 — files hidden straight from the device', () {

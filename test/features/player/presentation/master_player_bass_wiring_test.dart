@@ -36,6 +36,8 @@ final Track _track = Track(
   trackCount: 0,
   enrichmentAttempts: 0,
   enrichmentStatus: EnrichmentStatus.pending,
+  identityLocked: false,
+  overwriteOnEnrich: false,
 );
 
 class _PausedPlayerController extends PlayerController {

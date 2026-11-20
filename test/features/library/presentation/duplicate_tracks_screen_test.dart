@@ -30,6 +30,8 @@ void main() {
         enrichmentAttempts: 0,
         enrichmentStatus: EnrichmentStatus.pending,
         lastModifiedEpochMs: 0,
+        identityLocked: false,
+        overwriteOnEnrich: false,
       );
 
   testWidgets('each version shows its duration (mm:ss) next to its file path', (tester) async {

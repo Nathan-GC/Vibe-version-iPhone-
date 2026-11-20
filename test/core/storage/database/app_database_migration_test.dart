@@ -16,9 +16,18 @@ void main() {
   });
   tearDown(() => dir.deleteSync(recursive: true));
 
+  /// Retire ce que la v22 ajoute (verrou d'identité, écrasement à
+  /// l'enrichissement).
+  Future<void> dropV22Columns(AppDatabase legacy) async {
+    await legacy.customStatement('ALTER TABLE tracks DROP COLUMN identity_locked');
+    await legacy.customStatement('ALTER TABLE tracks DROP COLUMN overwrite_on_enrich');
+  }
+
   /// Retire ce que la v21 ajoute (image "Behind the window", BPM estimé,
-  /// table des enveloppes de basses).
+  /// table des enveloppes de basses) — et, la base de test étant créée au
+  /// schéma courant, ce que la v22 ajoute aussi.
   Future<void> dropV21Columns(AppDatabase legacy) async {
+    await dropV22Columns(legacy);
     await legacy.customStatement('ALTER TABLE playlists DROP COLUMN window_background_image_path');
     await legacy.customStatement('DROP TABLE track_bass_envelopes');
     await legacy.customStatement('ALTER TABLE tracks DROP COLUMN estimated_bpm');
@@ -308,5 +317,27 @@ void main() {
     expect(track.title, 'Kept');
     expect(track.estimatedBpm, equals(null));
     expect(await upgraded.select(upgraded.trackBassEnvelopes).get(), isEmpty);
+  });
+
+  test('upgrading from v21 adds the identity lock and the overwrite flag, existing rows keep false / false',
+      () async {
+    final AppDatabase legacy = AppDatabase.forTesting(NativeDatabase(dbFile));
+    await legacy.into(legacy.tracks).insert(TracksCompanion.insert(
+        id: 't1', title: 'Kept', album: 'Alb', artists: const ['A'], durationSeconds: 180, filePath: '/m/t1.mp3'));
+    await dropV22Columns(legacy);
+    await legacy.customStatement('PRAGMA user_version = 21');
+    await legacy.close();
+
+    final AppDatabase upgraded = AppDatabase.forTesting(NativeDatabase(dbFile));
+    addTearDown(upgraded.close);
+
+    final Track track = await upgraded.select(upgraded.tracks).getSingle();
+    expect(track.title, 'Kept');
+    expect(track.album, 'Alb');
+    expect(track.identityLocked, isFalse);
+    expect(track.overwriteOnEnrich, isFalse);
+    final int version =
+        await upgraded.customSelect('PRAGMA user_version').getSingle().then((row) => row.read<int>('user_version'));
+    expect(version, 22);
   });
 }

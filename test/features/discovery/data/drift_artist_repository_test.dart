@@ -7,6 +7,7 @@ import 'package:playlist_app/core/storage/database/app_database.dart';
 import 'package:playlist_app/core/storage/database/track_repository.dart';
 import 'package:playlist_app/core/storage/scanner/scanned_track.dart';
 import 'package:playlist_app/features/discovery/data/drift_artist_repository.dart';
+import 'package:playlist_app/features/discovery/domain/playlist_artist_candidate.dart';
 import 'package:playlist_app/features/discovery/domain/top_artist_playlist.dart';
 
 void main() {
@@ -175,6 +176,89 @@ void main() {
 
       expect(await updates.moveNext(), isTrue);
       expect(updates.current.map((t) => t.id).toSet(), {'t1', 't2'});
+    });
+  });
+
+  group('fetchArtistsForPlaylist', () {
+    setUp(() async {
+      await db.into(db.playlists).insert(PlaylistsCompanion.insert(id: 'p', title: 'Mix'));
+    });
+
+    Future<void> putInPlaylist(String trackId, {bool pending = true}) => db.into(db.playlistTracks).insert(
+          PlaylistTracksCompanion.insert(
+            playlistId: 'p',
+            trackId: trackId,
+            position: 0,
+            isPendingPlacement: Value(pending),
+          ),
+        );
+
+    Future<PlaylistArtistCandidate?> candidate(String name) async {
+      final List<PlaylistArtistCandidate> all = await artistRepository.fetchArtistsForPlaylist('p');
+      return all.where((c) => c.artistName == name).firstOrNull;
+    }
+
+    test('reports total and missing counts, sorted like fetchAllArtistNames', () async {
+      await addTrack(id: 'b1', artists: ['Beta']);
+      await addTrack(id: 'a1', artists: ['Alpha']);
+      await addTrack(id: 'a2', artists: ['Alpha']);
+      await putInPlaylist('a1', pending: false);
+
+      final List<PlaylistArtistCandidate> all = await artistRepository.fetchArtistsForPlaylist('p');
+      expect(all.map((c) => c.artistName), ['Alpha', 'Beta']);
+      expect(all.first.totalTracks, 2);
+      expect(all.first.missingTracks, 1);
+      expect(all.last.totalTracks, 1);
+      expect(all.last.missingTracks, 1);
+    });
+
+    test('counts featurings in the total', () async {
+      await addTrack(id: 't1', artists: ['Main']);
+      await addTrack(id: 't2', artists: ['Other', 'Main']);
+      await addTrack(id: 't3', artists: ['Other', 'Main']);
+
+      final PlaylistArtistCandidate? main = await candidate('Main');
+      expect(main?.totalTracks, 3);
+      expect(main?.missingTracks, 3);
+    });
+
+    test('groups case variants without double counting a track credited under both', () async {
+      await addTrack(id: 't1', artists: ['Daft Punk']);
+      await addTrack(id: 't2', artists: ['DAFT PUNK']);
+      await addTrack(id: 't3', artists: ['Daft Punk', 'DAFT PUNK']);
+
+      final List<PlaylistArtistCandidate> all = await artistRepository.fetchArtistsForPlaylist('p');
+      final Iterable<PlaylistArtistCandidate> daft = all.where((c) => c.artistName.toLowerCase() == 'daft punk');
+      expect(daft, hasLength(1));
+      expect(daft.single.totalTracks, 3);
+      expect(daft.single.missingTracks, 3);
+    });
+
+    test('a fully added artist has zero missing tracks', () async {
+      await addTrack(id: 't1', artists: ['Solo']);
+      await addTrack(id: 't2', artists: ['Solo']);
+      await addTrack(id: 't3', artists: ['Solo']);
+      for (final String id in ['t1', 't2', 't3']) {
+        await putInPlaylist(id);
+      }
+
+      final PlaylistArtistCandidate? solo = await candidate('Solo');
+      expect(solo?.totalTracks, 3);
+      expect(solo?.missingTracks, 0);
+    });
+
+    test('a single missing track is reported as 1, other playlists are ignored', () async {
+      await db.into(db.playlists).insert(PlaylistsCompanion.insert(id: 'q', title: 'Autre'));
+      await addTrack(id: 't1', artists: ['Solo']);
+      await addTrack(id: 't2', artists: ['Solo']);
+      await addTrack(id: 't3', artists: ['Solo']);
+      await putInPlaylist('t1');
+      await putInPlaylist('t2', pending: false);
+      await db.into(db.playlistTracks).insert(PlaylistTracksCompanion.insert(playlistId: 'q', trackId: 't3', position: 0));
+
+      final PlaylistArtistCandidate? solo = await candidate('Solo');
+      expect(solo?.totalTracks, 3);
+      expect(solo?.missingTracks, 1);
     });
   });
 }

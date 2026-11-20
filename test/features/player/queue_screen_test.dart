@@ -33,6 +33,8 @@ Track _track(int i) => Track(
       trackCount: 0,
       enrichmentAttempts: 0,
       enrichmentStatus: EnrichmentStatus.pending,
+      identityLocked: false,
+      overwriteOnEnrich: false,
     );
 
 void main() {

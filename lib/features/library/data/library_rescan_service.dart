@@ -43,7 +43,8 @@ typedef RescanProgress = ({int done, int total});
 ///   relus AVANT CHAQUE TITRE (l'utilisateur peut couper en cours de route) ;
 ///   sinon la passe s'arrête sans se terminer.
 /// - Jamais touchés : les choix explicites de l'utilisateur (statuts
-///   `enrichedManual*`), les fichiers absents/illisibles, les titres dont le
+///   `enrichedManual*`, titres renommés par le renommage rapide —
+///   `identityLocked`), les fichiers absents/illisibles, les titres dont le
 ///   nom reste trop ambigu pour interroger iTunes (même règle qu'à l'import).
 class LibraryRescanService {
   LibraryRescanService({
@@ -226,7 +227,9 @@ class LibraryRescanService {
   }
 
   Future<_Outcome> _process(Track track) async {
-    if (_userChosenStatuses.contains(track.enrichmentStatus)) return _Outcome.skipped;
+    // Renommage rapide : relire les tags du fichier annulerait le nom choisi
+    // par l'utilisateur, quel que soit le statut d'enrichissement du titre.
+    if (track.identityLocked || _userChosenStatuses.contains(track.enrichmentStatus)) return _Outcome.skipped;
 
     final ScannedTrack? identity;
     try {

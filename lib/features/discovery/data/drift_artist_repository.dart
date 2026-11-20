@@ -5,6 +5,7 @@ import '../../../core/storage/database/coalesced_watch.dart';
 import '../../../core/storage/metadata_extractor/artist_name_normalizer.dart';
 import '../domain/artist_filter.dart';
 import '../domain/artist_sort.dart';
+import '../domain/playlist_artist_candidate.dart';
 import '../domain/top_artist_playlist.dart';
 import 'artist_repository.dart';
 
@@ -98,6 +99,49 @@ class DriftArtistRepository implements ArtistRepository {
     final List<String> names = ArtistNameNormalizer.dedupeCaseInsensitive(rawNames);
     names.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     return names;
+  }
+
+  @override
+  Future<List<PlaylistArtistCandidate>> fetchArtistsForPlaylist(String playlistId) async {
+    // Deux lectures en bloc puis regroupement en Dart (pas une requête par
+    // artiste : bibliothèques de plusieurs milliers de titres). Même clé de
+    // regroupement et même nom canonique que _tracksOfArtist /
+    // fetchAllArtistNames, pour que le compte annoncé soit exactement ce que
+    // l'ajout insérera.
+    final creditsQuery = _db.selectOnly(_db.trackArtists)
+      ..addColumns([_db.trackArtists.trackId, _db.trackArtists.artistName]);
+    final List<TypedResult> credits = await creditsQuery.get();
+
+    final inPlaylistQuery = _db.selectOnly(_db.playlistTracks)
+      ..addColumns([_db.playlistTracks.trackId])
+      ..where(_db.playlistTracks.playlistId.equals(playlistId));
+    final Set<String> inPlaylist = {
+      for (final row in await inPlaylistQuery.get()) row.read(_db.playlistTracks.trackId)!,
+    };
+
+    final Set<String> rawNames = {for (final row in credits) row.read(_db.trackArtists.artistName)!};
+    final Map<String, String> canonicalByKey = {
+      for (final String name in ArtistNameNormalizer.dedupeCaseInsensitive(rawNames))
+        ArtistNameNormalizer.normalizeForGrouping(name): name,
+    };
+
+    // Ensemble : un morceau crédité sous deux variantes ne compte qu'une fois.
+    final Map<String, Set<String>> trackIdsByKey = {};
+    for (final row in credits) {
+      final String key = ArtistNameNormalizer.normalizeForGrouping(row.read(_db.trackArtists.artistName)!);
+      trackIdsByKey.putIfAbsent(key, () => {}).add(row.read(_db.trackArtists.trackId)!);
+    }
+
+    final List<PlaylistArtistCandidate> result = [
+      for (final MapEntry<String, Set<String>> entry in trackIdsByKey.entries)
+        PlaylistArtistCandidate(
+          artistName: canonicalByKey[entry.key]!,
+          totalTracks: entry.value.length,
+          missingTracks: entry.value.where((id) => !inPlaylist.contains(id)).length,
+        ),
+    ];
+    result.sort((a, b) => a.artistName.toLowerCase().compareTo(b.artistName.toLowerCase()));
+    return result;
   }
 
   @override

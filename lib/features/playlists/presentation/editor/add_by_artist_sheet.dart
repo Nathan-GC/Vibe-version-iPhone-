@@ -6,14 +6,22 @@ import '../../../../core/storage/database/app_database.dart';
 import '../../../discovery/data/artist_providers.dart';
 import '../../../discovery/domain/artist_filter.dart';
 import '../../../discovery/domain/artist_sort.dart';
+import '../../../discovery/domain/playlist_artist_candidate.dart';
 import '../../data/playlist_providers.dart';
+
+/// Sans recherche, un artiste n'est proposé qu'à partir de ce nombre total de
+/// titres dans la bibliothèque : en dessous, la liste serait noyée sous les
+/// artistes à un ou deux morceaux (featurings isolés).
+const int kMinTracksForArtistSuggestion = 3;
 
 /// Feuille "Ajouter par artiste" de l'éditeur de playlist (Feuille de route
 /// pt.9) : sélectionner un artiste de la bibliothèque ajoute d'un coup toutes
 /// ses musiques déjà téléchargées, triées par ordre chronologique de sortie
 /// (le plus ancien en premier — lecture "dans l'ordre" de la discographie de
 /// l'artiste, pas l'ordre inverse utilisé par le Profil Artiste pour mettre
-/// les nouveautés en avant).
+/// les nouveautés en avant). Sans recherche, seuls les artistes ayant au moins
+/// [kMinTracksForArtistSuggestion] titres dont un absent de la playlist sont
+/// listés ; une recherche montre tous les noms correspondants.
 class AddByArtistSheet extends ConsumerStatefulWidget {
   const AddByArtistSheet({super.key, required this.playlistId});
 
@@ -88,7 +96,7 @@ class _AddByArtistSheetState extends ConsumerState<AddByArtistSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final AsyncValue<List<String>> artistNames = ref.watch(allLocalArtistNamesProvider);
+    final AsyncValue<List<PlaylistArtistCandidate>> artistNames = ref.watch(artistsForPlaylistProvider(widget.playlistId));
 
     return SafeArea(
       child: Column(
@@ -118,8 +126,14 @@ class _AddByArtistSheetState extends ConsumerState<AddByArtistSheet> {
           Flexible(
             child: artistNames.when(
               data: (data) {
-                final List<String> filtered =
-                    _query.isEmpty ? data : data.where((name) => name.toLowerCase().contains(_query)).toList();
+                // Sans recherche : seuil + au moins un titre à ajouter. Avec
+                // recherche : tout nom correspondant, même complet ou petit —
+                // l'utilisateur cherche cet artiste précis.
+                final List<PlaylistArtistCandidate> filtered = _query.isEmpty
+                    ? data
+                        .where((c) => c.totalTracks >= kMinTracksForArtistSuggestion && c.missingTracks > 0)
+                        .toList()
+                    : data.where((c) => c.artistName.toLowerCase().contains(_query)).toList();
                 if (filtered.isEmpty) {
                   return const Padding(padding: EdgeInsets.all(24), child: Text('Aucun artiste trouvé.'));
                 }
@@ -127,11 +141,19 @@ class _AddByArtistSheetState extends ConsumerState<AddByArtistSheet> {
                   shrinkWrap: true,
                   itemCount: filtered.length,
                   itemBuilder: (context, index) {
-                    final String artistName = filtered[index];
+                    final PlaylistArtistCandidate candidate = filtered[index];
+                    final String artistName = candidate.artistName;
+                    final bool allAdded = candidate.missingTracks == 0;
                     final bool isAdding = _addingArtist == artistName;
                     return ListTile(
                       leading: const CircleAvatar(child: Icon(Icons.person_outline)),
                       title: Text(artistName),
+                      subtitle: Text(
+                        allAdded
+                            ? 'Déjà dans la playlist'
+                            : '${candidate.missingTracks} titre${candidate.missingTracks > 1 ? 's' : ''} à ajouter',
+                        style: allAdded ? TextStyle(color: Theme.of(context).disabledColor) : null,
+                      ),
                       trailing: isAdding
                           ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
                           : null,

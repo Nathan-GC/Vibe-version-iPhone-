@@ -311,6 +311,31 @@ void main() {
       expect((await prefs()).getInt(LibraryRescanService.doneVersionKey), 1);
     });
 
+    test('a title locked by the quick rename is never looked up nor rewritten, whatever its status', () async {
+      await addTrack('a', status: EnrichmentStatus.enrichedAutoItunes);
+      await addTrack('b', status: EnrichmentStatus.pending);
+      await addTrack('c');
+      for (final String id in ['a', 'b']) {
+        await (db.update(db.tracks)..where((t) => t.id.equals(id)))
+            .write(const TracksCompanion(identityLocked: Value(true)));
+      }
+      enricher.respond = (_) => const MatchLookup.completed(EnrichmentMatch(_itunes, swapped: false));
+
+      await build().runIfPending();
+
+      expect(enricher.lookups, hasLength(1), reason: 'seul le titre non verrouillé est interrogé');
+      expect(scan.identified, ['c'], reason: 'le fichier d\'un titre verrouillé n\'est même pas relu');
+      for (final String id in ['a', 'b']) {
+        final Track locked = await track(id);
+        expect(locked.title, 'Old $id');
+        expect(locked.artists, ['Old Artist']);
+        expect(locked.album, 'Old Album');
+        expect(await artistIndex(id), ['Old Artist']);
+      }
+      expect((await track('c')).title, 'T-c', reason: 'le titre non verrouillé est bien réécrit');
+      expect((await prefs()).getInt(LibraryRescanService.doneVersionKey), 1);
+    });
+
     test('missing file, unreadable identity and ambiguous name are skipped without a request', () async {
       await addTrack('a', createFile: false);
       await addTrack('b', identity: null, withIdentity: false);

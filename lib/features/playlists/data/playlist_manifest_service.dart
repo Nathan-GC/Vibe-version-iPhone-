@@ -6,6 +6,7 @@ import '../../../core/identity/track_match_key.dart';
 import '../../../core/playlist_manifest/manifest_track_ref.dart';
 import '../../../core/playlist_manifest/playlist_manifest.dart';
 import '../../../core/storage/database/app_database.dart';
+import '../../../core/storage/database/track_repository.dart';
 import '../../../core/theme/vibe_engine/vibe_engine.dart';
 import '../../diff/domain/diff_result.dart';
 import '../domain/import_match_plan.dart';
@@ -170,14 +171,25 @@ class PlaylistManifestService {
 
   /// Titres de la playlist dans l'ordre d'affichage, morceaux et titres
   /// grisés fusionnés.
+  ///
+  /// Seul l'export de « Tous les titres importés » porte l'`id` interne de
+  /// chaque morceau : il sert au futur renommage rapide, qui retrouve alors
+  /// chaque titre par identifiant, même si l'ordre ou le nombre de titres de
+  /// la bibliothèque a bougé entre l'export et le réimport. Les playlists
+  /// partagées n'en ont pas besoin (et leur manifeste reste identique) ; les
+  /// titres grisés n'ont aucun morceau local, donc jamais d'`id`.
   Future<List<ManifestTrackRef>> _orderedRefs(String playlistId) async {
+    final bool withIds = playlistId == kAllImportedPlaylistId;
     final query = _db.select(_db.playlistTracks).join([
       innerJoin(_db.tracks, _db.tracks.id.equalsExp(_db.playlistTracks.trackId)),
     ])
       ..where(_db.playlistTracks.playlistId.equals(playlistId));
     final List<(int, ManifestTrackRef)> positioned = [
       for (final row in await query.get())
-        (row.readTable(_db.playlistTracks).position, _toManifestRef(row.readTable(_db.tracks))),
+        (
+          row.readTable(_db.playlistTracks).position,
+          _toManifestRef(row.readTable(_db.tracks), withId: withIds),
+        ),
     ];
     final List<PlaylistMissingTrack> missing =
         await (_db.select(_db.playlistMissingTracks)..where((m) => m.playlistId.equals(playlistId))).get();
@@ -189,10 +201,11 @@ class PlaylistManifestService {
     return positioned.map((pair) => pair.$2).toList();
   }
 
-  ManifestTrackRef _toManifestRef(Track track) => ManifestTrackRef(
+  ManifestTrackRef _toManifestRef(Track track, {required bool withId}) => ManifestTrackRef(
         title: track.title,
         artist: track.artists.isNotEmpty ? track.artists.first : 'Unknown',
         album: track.album.isEmpty ? null : track.album,
+        id: withId ? track.id : null,
       );
 
   VibePreset _parseVibe(String raw) =>

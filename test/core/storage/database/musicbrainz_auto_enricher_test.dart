@@ -103,6 +103,27 @@ void main() {
       expect(track.enrichmentStatus, EnrichmentStatus.enrichedAutoMusicBrainz);
     });
 
+    test('a track flagged for re-enrichment gets its old album, year and cover overwritten, then the flag drops',
+        () async {
+      await insertTrack(coverArtPath: 'local/old.jpg');
+      await (db.update(db.tracks)..where((t) => t.id.equals('t1'))).write(const TracksCompanion(
+        album: Value('Old Album'),
+        releaseYear: Value(1999),
+        overwriteOnEnrich: Value(true),
+      ));
+
+      final bool ok = await enricher(_FakeMusicBrainzClient(const [_mbMatch]))
+          .enrichTrack(trackId: 't1', title: 'Bootleg Mix', artists: const ['Some DJ']);
+
+      expect(ok, isTrue);
+      final Track track = (await repository.findById('t1'))!;
+      expect(track.album, 'Club Edits');
+      expect(track.releaseYear, 2019);
+      expect(track.coverArtPath, _mbMatch.coverArtUrl);
+      expect(track.overwriteOnEnrich, isFalse);
+      expect(track.enrichmentStatus, EnrichmentStatus.enrichedAutoMusicBrainz);
+    });
+
     test('an unrelated result counts as a failed attempt, until the circuit-breaker stops the API', () async {
       await insertTrack();
       final client = _FakeMusicBrainzClient(const [OnlineTrackResult(title: 'Something Else', artist: 'Other')]);

@@ -152,7 +152,13 @@ class TrackAutoEnricher implements TrackEnricher {
     }
 
     final EnrichmentMatch? match = lookup.match;
-    if (match == null) {
+    // Titre verrouillé (renommage rapide) : une correspondance qui n'existe
+    // qu'en ordre inversé reviendrait à réécrire Titre/Artiste choisis par
+    // l'utilisateur. Elle est donc traitée comme « aucune correspondance
+    // fiable » : même tentative comptée et même repli MusicBrainz, sans
+    // rien écrire d'inversé (voir TrackRepository.correctReversedTitleArtist).
+    final bool lockedAndSwapped = match != null && match.swapped && (track?.identityLocked ?? false);
+    if (match == null || lockedAndSwapped) {
       // Recherche aboutie sans correspondance fiable (ni directe, ni inversée,
       // ni artiste/titre exploitable pour tenter l'inversion) : tentative comptée.
       // Y compris quand les deux catalogues ont échoué sur des erreurs DÉFINITIVES

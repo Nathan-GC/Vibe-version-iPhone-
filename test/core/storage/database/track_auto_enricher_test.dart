@@ -276,6 +276,28 @@ void main() {
     expect(track.requiresUserReview, isFalse);
   });
 
+  test('a title locked by the quick rename is never inverted, even when the reversed order matches', () async {
+    // Même cas que ci-dessus, mais le titre vient d'un renommage rapide : un
+    // nouvel enrichissement ne doit pas défaire le choix de l'utilisateur.
+    await insertTrack(id: 't1', title: 'Beyoncé', artists: ['Halo']);
+    await (db.update(db.tracks)..where((t) => t.id.equals('t1')))
+        .write(const TracksCompanion(identityLocked: Value(true)));
+    final enricher = TrackAutoEnricher(
+      metadataApiClient: _FakeMetadataApiClient(
+          const [OnlineTrackResult(artist: 'Beyoncé', title: 'Halo', album: 'I Am... Sasha Fierce')]),
+      trackRepository: repository,
+    );
+
+    final bool ok = await enricher.enrichTrack(trackId: 't1', title: 'Beyoncé', artists: ['Halo']);
+
+    expect(ok, isFalse);
+    final track = await repository.findById('t1');
+    expect(track!.title, 'Beyoncé');
+    expect(track.artists, ['Halo']);
+    expect(track.album, isEmpty);
+    expect(track.enrichmentAttempts, 1, reason: 'recherche aboutie sans correspondance exploitable : tentative comptée');
+  });
+
   test('E4: no inversion when the local title carries a version keyword the candidate lacks', () async {
     // Cas réel : artiste « Desire », titre « Ian Asher (Remix) » — le candidat
     // inversé « Desire » de Ian Asher n'est pas ce remix : rien n'est écrasé.

@@ -148,6 +148,17 @@ class Tracks extends Table {
   // BPM estimé hors ligne quand le tag manque (distinct de `bpm`, valeur de
   // tag ou 120 par défaut). Null : pas d'estimation.
   IntColumn get estimatedBpm => integer().nullable()();
+  // Titre/artistes figés (v22) : posé par le renommage rapide. Le nouveau scan,
+  // la ré-extraction d'un fichier modifié et la correction "titre/artiste
+  // inversés" ne les réécrivent plus — sinon une relecture des tags du fichier
+  // annulerait le renommage de l'utilisateur. Les éditions manuelles
+  // (éditeur de métadonnées, fusion d'artistes) restent permises.
+  BoolColumn get identityLocked => boolean().withDefault(const Constant(false))();
+  // Réenrichissement demandé (v22) : le prochain enrichissement fiable (iTunes
+  // ou MusicBrainz) ÉCRASE album, année, pochette, genre et n° de piste/disque
+  // au lieu de ne combler que les champs vides, puis remet ce drapeau à false.
+  // Un échec (correspondance non fiable) le laisse en place.
+  BoolColumn get overwriteOnEnrich => boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -326,7 +337,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 21;
+  int get schemaVersion => 22;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -526,6 +537,13 @@ class AppDatabase extends _$AppDatabase {
             await m.addColumn(playlists, playlists.windowBackgroundImagePath);
             await m.addColumn(tracks, tracks.estimatedBpm);
             await m.createTable(trackBassEnvelopes);
+          }
+          if (from < 22) {
+            // Renommage rapide et réenrichissement (v1.4) : deux colonnes
+            // additives, les morceaux existants gardent false / false (ni
+            // verrouillés, ni en attente d'écrasement).
+            await m.addColumn(tracks, tracks.identityLocked);
+            await m.addColumn(tracks, tracks.overwriteOnEnrich);
           }
         },
       );

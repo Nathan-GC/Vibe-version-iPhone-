@@ -1,6 +1,7 @@
 import '../../../core/storage/database/app_database.dart';
 import '../domain/artist_filter.dart';
 import '../domain/artist_sort.dart';
+import '../domain/playlist_artist_candidate.dart';
 import '../domain/top_artist_playlist.dart';
 
 abstract class ArtistRepository {
@@ -25,4 +26,10 @@ abstract class ArtistRepository {
   /// cet écran n'affiche pas de pochette, contrairement à
   /// [fetchTopArtistPlaylists].
   Future<List<TopArtistPlaylist>> fetchAllArtistsWithTrackCount();
+
+  /// Chaque artiste (nom canonique, triés comme [fetchAllArtistNames]) avec
+  /// son nombre total de morceaux et le nombre de ceux absents de la playlist
+  /// [playlistId] — alimente le filtre de "Ajouter par artiste". Les titres
+  /// grisés de la playlist ne comptent pas.
+  Future<List<PlaylistArtistCandidate>> fetchArtistsForPlaylist(String playlistId);
 }

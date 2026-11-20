@@ -11,29 +11,22 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../../core/platform/app_platform.dart';
 import '../../../../core/storage/database/app_database.dart';
-import '../../../../core/storage/database/track_repository.dart';
 import '../../data/playlist_manifest_service.dart';
 import '../../data/playlist_providers.dart';
-import '../../data/playlist_repository.dart';
 
 /// Export JSON d'une playlist créée par l'utilisateur :
 ///  1. fenêtre "Nom de l'auteur de la playlist" (dernier nom saisi proposé) ;
 ///  2. JSON (titre, auteur, pistes) enregistré à l'emplacement choisi via le
 ///     sélecteur système — repli sur le dossier de l'app si indisponible.
 ///
-/// Jamais proposé pour les sélections système ([isExportable]).
+/// Vaut pour toute playlist, y compris les playlists système "Titres likés"
+/// et "Tous les titres importés" : c'est au menu de décider où le proposer.
 class PlaylistExportFlow {
   const PlaylistExportFlow._();
 
   static const String _lastAuthorKey = 'playlist_export.last_author';
 
-  /// "Titres likés" et "Tous les titres importés" sont des sélections gérées
-  /// par l'app, pas des playlists de l'utilisateur : pas d'export.
-  static bool isExportable(Playlist playlist) =>
-      playlist.id != kAllImportedPlaylistId && playlist.id != kLikedPlaylistId;
-
   static Future<void> run(BuildContext context, WidgetRef ref, Playlist playlist) async {
-    if (!isExportable(playlist)) return;
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
     final PlaylistManifestService service = ref.read(playlistManifestServiceProvider);
     final SharedPreferences prefs = await SharedPreferences.getInstance();

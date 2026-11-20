@@ -13,6 +13,7 @@ import 'app_database.dart';
 import 'database_provider.dart';
 import 'library_category.dart';
 import 'missing_playlist_track_reconciler.dart';
+import 'quick_rename_change.dart';
 import 'track_enricher.dart';
 
 final Provider<TrackRepository> trackRepositoryProvider = Provider<TrackRepository>((ref) {
@@ -257,7 +258,12 @@ class TrackRepository {
       // ci-dessous créerait une seconde ligne et heurterait l'unicité de
       // `file_path`.
       final Track? previous = await findByFilePath(scanned.filePath);
-      if (previous != null && previous.id != scanned.id && await findById(scanned.id) != null) {
+      // Titre renommé par l'utilisateur (renommage rapide) : le fichier relu
+      // peut avoir changé, mais ses tags ne doivent jamais défaire ce nom.
+      // Id, titre, artistes et `track_artists` restent ceux de la ligne
+      // existante ; durée, silences, empreinte, pochette… se mettent à jour.
+      final Track? locked = (previous != null && previous.identityLocked) ? previous : null;
+      if (locked == null && previous != null && previous.id != scanned.id && await findById(scanned.id) != null) {
         // Nouvelle clé déjà portée par un AUTRE fichier (deux copies devenues
         // identiques, ex. « Été » / « Ete » depuis le repli des accents) : la
         // ligne existante est gardée telle quelle — l'écraser heurterait
@@ -270,7 +276,7 @@ class TrackRepository {
         await _deleteExtractedCover(scanned.coverArtPath);
         return previous.id;
       }
-      if (previous != null && previous.id != scanned.id) {
+      if (locked == null && previous != null && previous.id != scanned.id) {
         await (_db.update(_db.tracks)..where((t) => t.id.equals(previous.id)))
             .write(TracksCompanion(id: Value(scanned.id)));
         await (_db.update(_db.playlistTracks)..where((t) => t.trackId.equals(previous.id)))
@@ -284,7 +290,9 @@ class TrackRepository {
       // la ligne existante disparu : c'est un remplacement, comportement
       // historique (la ligne est réécrite sous le même id). Un titre déjà
       // indexé sous ce chemin (`previous`) garde son id : c'est le même fichier.
-      String trackId = scanned.id;
+      String trackId = locked?.id ?? scanned.id;
+      final String storedTitle = locked?.title ?? scanned.title;
+      final List<String> storedArtists = locked?.artists ?? artists;
       if (previous == null) {
         final Track? holder = await findById(scanned.id);
         if (holder != null && _fileStillThere(holder.filePath)) trackId = await _firstFreeVariantId(scanned.id);
@@ -293,23 +301,26 @@ class TrackRepository {
       await _db.into(_db.tracks).insertOnConflictUpdate(
             TracksCompanion.insert(
               id: trackId,
-              title: scanned.title,
+              title: storedTitle,
               album: scanned.album,
-              artists: artists,
+              artists: storedArtists,
               durationSeconds: scanned.durationMs ~/ 1000,
               filePath: scanned.filePath,
               trimStartMs: Value(scanned.trimStartMs),
               trimEndMs: Value(scanned.trimEndMs),
               bpm: scanned.bpm == null ? const Value.absent() : Value(scanned.bpm!),
-              requiresUserReview: Value(scanned.requiresUserReview),
+              // Un titre verrouillé a déjà été nommé par l'utilisateur : un nom
+              // de fichier ambigu ne le renvoie pas dans « À renommer ».
+              requiresUserReview: Value(locked == null && scanned.requiresUserReview),
               tags: Value(scanned.genre == null ? const [] : [scanned.genre!]),
               lastModifiedEpochMs: Value(scanned.lastModifiedEpochMs),
               fileHash: Value(scanned.fileHash),
               // Voir [EnrichmentStatus] : un morceau ambigu dès le nom de
               // fichier ne doit pas gaspiller de tentative d'enrichissement
               // automatique tant qu'un humain n'a pas confirmé Titre/Artiste.
-              enrichmentStatus:
-                  Value(scanned.requiresUserReview ? EnrichmentStatus.requiresReview : EnrichmentStatus.pending),
+              enrichmentStatus: Value(locked == null && scanned.requiresUserReview
+                  ? EnrichmentStatus.requiresReview
+                  : EnrichmentStatus.pending),
             ),
           );
 
@@ -319,11 +330,11 @@ class TrackRepository {
 
       await (_db.delete(_db.trackArtists)..where((t) => t.trackId.equals(trackId))).go();
 
-      if (artists.isNotEmpty) {
+      if (storedArtists.isNotEmpty) {
         await _db.batch((batch) {
           batch.insertAll(_db.trackArtists, [
-            for (int i = 0; i < artists.length; i++)
-              TrackArtistsCompanion.insert(trackId: trackId, artistName: artists[i], position: i),
+            for (int i = 0; i < storedArtists.length; i++)
+              TrackArtistsCompanion.insert(trackId: trackId, artistName: storedArtists[i], position: i),
           ]);
         });
       }
@@ -334,8 +345,8 @@ class TrackRepository {
       // une playlist importée (JSON) — il y redevient lisible, à sa place.
       await MissingPlaylistTrackReconciler(_db).reconcileTrack(
         trackId: trackId,
-        title: scanned.title,
-        artists: artists,
+        title: storedTitle,
+        artists: storedArtists,
       );
       return trackId;
     });
@@ -582,12 +593,30 @@ class TrackRepository {
   /// [TrackMatchConfidence] (ex. titre local "Feel Good" vs résultat "Confetti"
   /// du même artiste) — évite d'appliquer pochette/album/genre d'un morceau
   /// homonyme ou d'un remix sans rapport au morceau local.
+  ///
+  /// Mode écrasement (`overwriteOnEnrich`, posé par [markForReenrichment]) :
+  /// l'utilisateur a demandé un réenrichissement, typiquement après un
+  /// renommage rapide — les anciennes métadonnées appartenaient à l'ancien
+  /// titre et seraient fausses, mais « ne combler que le vide » les
+  /// conserverait. Une fois la correspondance jugée fiable (même contrôle que
+  /// ci-dessus), le résultat REMPLACE album, année, pochette, n° de piste/
+  /// disque/total et tags (genre/époque/mood reconstruits sans fusionner les
+  /// anciens), et le drapeau retombe à false dans la même écriture. Une
+  /// valeur que le résultat ne fournit pas laisse l'existante en place ; un
+  /// échec de confiance n'écrit rien et laisse le drapeau pour la tentative
+  /// suivante. Une pochette http(s) écrite ici est rapatriée par le
+  /// déclencheur automatique (RemoteCoverAutoTrigger).
   Future<bool> enrichFromOnlineMetadata(String trackId, OnlineTrackResult match) async {
     final Track? track = await findById(trackId);
     if (track == null) return false;
 
     if (!TrackMatchConfidence.isReliableMatch(localTitle: track.title, localArtists: track.artists, candidate: match)) {
       return false;
+    }
+
+    if (track.overwriteOnEnrich) {
+      await _overwriteWithOnlineMetadata(track, match);
+      return true;
     }
 
     final List<String> keywords = MusicKeywordEnricher.buildKeywords(
@@ -619,6 +648,35 @@ class TrackRepository {
     return true;
   }
 
+  /// Écriture du mode écrasement de [enrichFromOnlineMetadata] : [match] a déjà
+  /// été jugé fiable. Une valeur à 0 ou négative est « inconnue » (comme pour
+  /// [applyRescanResult]) : jamais écrite par-dessus une valeur connue.
+  Future<void> _overwriteWithOnlineMetadata(Track track, OnlineTrackResult match) async {
+    int? known(int? value) => (value != null && value > 0) ? value : null;
+    final String? album = (match.album?.isNotEmpty ?? false) ? match.album : null;
+    final String? cover = (match.coverArtUrl?.isNotEmpty ?? false) ? match.coverArtUrl : null;
+    final int? year = known(match.releaseYear);
+    final int? trackNumber = known(match.trackNumber);
+    final int? discNumber = known(match.discNumber);
+    final int? trackCount = known(match.trackCount);
+    // Repart de zéro : l'ancien genre venait de l'ancienne identité du titre.
+    // Un résultat sans genre ni année ne vide pas les tags pour autant.
+    final List<String> keywords = MusicKeywordEnricher.buildKeywords(genre: match.genre, releaseYear: match.releaseYear);
+
+    await (_db.update(_db.tracks)..where((t) => t.id.equals(track.id))).write(
+      TracksCompanion(
+        album: album == null ? const Value.absent() : Value(album),
+        releaseYear: year == null ? const Value.absent() : Value(year),
+        coverArtPath: cover == null ? const Value.absent() : Value(cover),
+        trackNumber: trackNumber == null ? const Value.absent() : Value(trackNumber),
+        discNumber: discNumber == null ? const Value.absent() : Value(discNumber),
+        trackCount: trackCount == null ? const Value.absent() : Value(trackCount),
+        tags: keywords.isEmpty ? const Value.absent() : Value(keywords),
+        overwriteOnEnrich: const Value(false),
+      ),
+    );
+  }
+
   /// Corrige Titre et Artiste à partir d'une correspondance iTunes fiable
   /// trouvée en ordre inversé (voir [TrackAutoEnricher.enrichTrack]) — cas
   /// vérifié empiriquement sur de vrais fichiers dont le nom source liste
@@ -635,9 +693,13 @@ class TrackRepository {
   /// comme *titre* et à `track.title` comme *artiste*, sans quoi rien n'est
   /// écrit. Sort aussi le morceau de "À renommer" : on a désormais une
   /// confirmation externe fiable.
+  ///
+  /// Sans effet (`false`) sur un titre verrouillé (`identityLocked`, renommage
+  /// rapide) : son Titre/Artiste vient d'un choix explicite de l'utilisateur,
+  /// qu'une inversion « confirmée » par iTunes ne doit pas défaire.
   Future<bool> correctReversedTitleArtist(String trackId, OnlineTrackResult match) async {
     final Track? track = await findById(trackId);
-    if (track == null) return false;
+    if (track == null || track.identityLocked) return false;
 
     final bool swapConfirmed = TrackMatchConfidence.isReliableMatch(
       localTitle: track.artists.isNotEmpty ? track.artists.first : '',
@@ -688,6 +750,100 @@ class TrackRepository {
     });
 
     return true;
+  }
+
+  /// Renommage rapide (import d'un JSON de titres/artistes corrigés) : applique
+  /// tous les [changes] dans UNE seule transaction — des centaines, voire des
+  /// milliers de titres, ne doivent pas coûter autant de transactions ni
+  /// d'émissions des flux Drift. Retourne le nombre de morceaux réellement
+  /// modifiés ; un id introuvable est ignoré.
+  ///
+  /// Par morceau : titre, artistes, réécriture de `track_artists` (positions
+  /// 0..n, comme [upsertTrack]) et `identityLocked` posé — sans ce verrou, le
+  /// prochain nouveau scan ou la ré-extraction du fichier relirait ses tags et
+  /// annulerait le renommage. L'`id` ne change jamais (même règle que
+  /// [updateMetadata]) : playlists, likes et file de lecture restent valides.
+  ///
+  /// Catégorie : un titre « À renommer » (voir [libraryCategoryOf]) devient
+  /// « À enrichir » (statut `pending`, tentatives à 0, plus `requiresUserReview`)
+  /// puisque l'utilisateur vient de lui donner un vrai nom. Tout autre morceau
+  /// garde son statut ET ses anciennes métadonnées (album, année, pochette,
+  /// tags) : le réenrichissement est un choix distinct
+  /// ([markForReenrichment]). Un titre grisé d'une playlist importée qui
+  /// correspond au nouveau nom est dégrisé, comme à l'import.
+  Future<int> applyQuickRename(List<QuickRenameChange> changes) async {
+    if (changes.isEmpty) return 0;
+    return _db.transaction<int>(() async {
+      int modified = 0;
+      for (final QuickRenameChange change in changes) {
+        final Track? track = await findById(change.trackId);
+        if (track == null) continue;
+
+        // Même dédoublonnage qu'à l'import (UNIQUE(track_id, artist_name)),
+        // ordre préservé : le principal reste en premier.
+        final List<String> artists = [];
+        for (final String name in change.artists) {
+          if (name.isNotEmpty && !artists.contains(name)) artists.add(name);
+        }
+        final bool wasToRename = libraryCategoryOf(track) == LibraryCategory.toRename;
+
+        await (_db.update(_db.tracks)..where((t) => t.id.equals(track.id))).write(
+          TracksCompanion(
+            title: Value(change.title),
+            artists: Value(artists),
+            identityLocked: const Value(true),
+            requiresUserReview: wasToRename ? const Value(false) : const Value.absent(),
+            enrichmentStatus: wasToRename ? const Value(EnrichmentStatus.pending) : const Value.absent(),
+            enrichmentAttempts: wasToRename ? const Value(0) : const Value.absent(),
+          ),
+        );
+
+        await (_db.delete(_db.trackArtists)..where((t) => t.trackId.equals(track.id))).go();
+        if (artists.isNotEmpty) {
+          await _db.batch((batch) {
+            batch.insertAll(_db.trackArtists, [
+              for (int i = 0; i < artists.length; i++)
+                TrackArtistsCompanion.insert(trackId: track.id, artistName: artists[i], position: i),
+            ]);
+          });
+        }
+
+        await MissingPlaylistTrackReconciler(_db).reconcileTrack(
+          trackId: track.id,
+          title: change.title,
+          artists: artists,
+        );
+        modified++;
+      }
+      return modified;
+    });
+  }
+
+  /// « Réenrichir » après un renommage rapide : remet ces morceaux dans la file
+  /// d'enrichissement (`pending`, tentatives à 0, plus « À renommer ») et lève
+  /// `overwriteOnEnrich` — le prochain enrichissement fiable (iTunes ou
+  /// MusicBrainz) écrasera alors album, année, pochette, genre et n° de piste
+  /// au lieu de ne combler que les champs vides (voir
+  /// [enrichFromOnlineMetadata]). Sans cela, les métadonnées de l'ancien titre
+  /// resteraient collées au nouveau nom. Les ids inconnus sont ignorés.
+  Future<void> markForReenrichment(List<String> trackIds) async {
+    if (trackIds.isEmpty) return;
+    await _db.transaction(() async {
+      // Par lots : SQLite limite le nombre de variables d'une requête (999
+      // sur les anciennes versions), or le renommage peut toucher des milliers
+      // de titres.
+      for (int i = 0; i < trackIds.length; i += 500) {
+        final List<String> chunk = trackIds.sublist(i, i + 500 > trackIds.length ? trackIds.length : i + 500);
+        await (_db.update(_db.tracks)..where((t) => t.id.isIn(chunk))).write(
+          const TracksCompanion(
+            enrichmentStatus: Value(EnrichmentStatus.pending),
+            enrichmentAttempts: Value(0),
+            requiresUserReview: Value(false),
+            overwriteOnEnrich: Value(true),
+          ),
+        );
+      }
+    });
   }
 
   /// Scanner de nettoyage des artistes (case-insensitive) : détecte les noms
@@ -891,7 +1047,11 @@ class TrackRepository {
   /// Ne touche jamais id, chemin, durée, silences, playlists, lectures/likes ni
   /// date de création. Les titres grisés d'une playlist importée ne sont
   /// dégrisés (comme à l'import) que si titre/artistes ont réellement changé.
-  /// `false` si le titre n'existe plus.
+  /// `false` si le titre n'existe plus, ou s'il est verrouillé (`identityLocked`,
+  /// renommage rapide : le service de nouveau scan le saute déjà, ce garde-fou
+  /// protège un appelant qui l'oublierait). Le mode écrasement
+  /// (`overwriteOnEnrich`) ne concerne pas cette méthode : le nouveau scan a sa
+  /// propre règle de remplacement des métadonnées.
   Future<bool> applyRescanResult(
     String trackId, {
     required String title,
@@ -902,7 +1062,7 @@ class TrackRepository {
     String? genre,
   }) async {
     final Track? track = await findById(trackId);
-    if (track == null) return false;
+    if (track == null || track.identityLocked) return false;
 
     // Même dédoublonnage qu'à l'import (UNIQUE(track_id, artist_name)), ordre préservé.
     final List<String> newArtists = [];

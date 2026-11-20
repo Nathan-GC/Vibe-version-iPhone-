@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -11,6 +12,7 @@ import '../../../core/shared/widgets/enrichment_source_dialog.dart';
 import '../../../core/shared/widgets/library_category_picker.dart';
 import '../../../core/shared/widgets/local_cover_image.dart';
 import '../../../core/shared/widgets/track_actions_sheet.dart';
+import '../../../core/storage/cover_art/remote_cover_localizer.dart';
 import '../../../core/storage/database/app_database.dart';
 import '../../../core/storage/database/blacklist_repository.dart';
 import '../../../core/storage/database/duplicate_track_group.dart';
@@ -41,6 +43,23 @@ class LibraryScreen extends ConsumerStatefulWidget {
 class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   bool _busy = false;
   String? _statusMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    // Demande posée avant la navigation (renommage rapide) : l'écoute de
+    // `build` ne voit pas la valeur initiale, on la consomme donc ici, une
+    // fois le premier cadre posé (le dialogue de choix de source a besoin du
+    // contexte monté).
+    WidgetsBinding.instance.addPostFrameCallback((_) => _runRequestedEnrichment());
+  }
+
+  /// Lance « Enrichir tout » si une demande one-shot est en attente ; la
+  /// consommation la remet à zéro, impossible de la rejouer.
+  void _runRequestedEnrichment() {
+    if (!mounted || _busy) return;
+    if (ref.read(enrichAllRequestProvider.notifier).consume()) unawaited(_enrichLibrary());
+  }
 
   Future<void> _importFiles() async {
     final List<PlatformFile> picked = await FilePicker.pickFiles(type: FileType.audio);
@@ -291,6 +310,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       _statusMessage = null;
     });
 
+    // Pochettes http(s) fraîchement écrites : rapatriées tout de suite plutôt
+    // que d'attendre l'anti-rebond du déclencheur automatique (3 s). Le
+    // localiseur garde son garde-fou RGPD et ne lève jamais d'exception.
+    unawaited(ref.read(remoteCoverLocalizerProvider).localizePending());
+
     await _proposeMergeArtists();
   }
 
@@ -319,6 +343,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Écran déjà monté quand la demande arrive.
+    ref.listen<bool>(enrichAllRequestProvider, (previous, requested) {
+      if (requested) _runRequestedEnrichment();
+    });
     final AsyncValue<List<Track>> allTracks = ref.watch(libraryTracksProvider);
     final List<DuplicateTrackGroup> duplicateGroups = ref.watch(duplicateTrackGroupsProvider).value ?? const [];
     final LibraryFilterState filter = ref.watch(libraryFilterProvider);

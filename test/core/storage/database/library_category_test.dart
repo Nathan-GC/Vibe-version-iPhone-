@@ -38,6 +38,8 @@ Track _track(
     trackCount: 0,
     enrichmentAttempts: 0,
     enrichmentStatus: status,
+    identityLocked: false,
+    overwriteOnEnrich: false,
   );
 }
 

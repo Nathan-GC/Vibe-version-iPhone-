@@ -223,6 +223,10 @@ class _TrackSnapshotSerializer extends ValueSerializer {
   @override
   T fromJson<T>(dynamic json) {
     if (T == EnrichmentStatus) return const EnrichmentStatusConverter().fromSql(json as String) as T;
+    // Instantané écrit avant la v22 : les colonnes booléennes ajoutées depuis
+    // (verrou d'identité, écrasement à l'enrichissement) y sont absentes —
+    // valeur par défaut du schéma, sinon la restauration échouerait.
+    if (json == null && T == bool) return false as T;
     if (json is List) return json.cast<String>().toList() as T;
     return _defaults.fromJson<T>(json);
   }

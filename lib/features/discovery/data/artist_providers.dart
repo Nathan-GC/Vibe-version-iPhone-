@@ -7,6 +7,7 @@ import '../domain/album_group.dart';
 import '../domain/artist_filter.dart';
 import '../domain/artist_metadata.dart';
 import '../domain/artist_sort.dart';
+import '../domain/playlist_artist_candidate.dart';
 import '../domain/top_artist_playlist.dart';
 import 'artist_metadata_api.dart';
 import 'artist_repository.dart';
@@ -47,11 +48,12 @@ final albumTracksProvider = FutureProvider.autoDispose.family<List<OnlineTrackRe
   return ref.watch(artistMetadataApiProvider).fetchAlbumTracks(collectionId);
 });
 
-/// Noms de tous les artistes locaux — sélecteur "Ajouter par artiste" de
-/// l'éditeur de playlist (Feuille de route pt.9). `autoDispose` : inutile de
-/// garder cette liste en mémoire une fois la feuille de sélection fermée.
-final allLocalArtistNamesProvider = FutureProvider.autoDispose<List<String>>((ref) {
-  return ref.watch(artistRepositoryProvider).fetchAllArtistNames();
+/// Artistes avec leurs compteurs (total / manquants) pour la playlist donnée —
+/// filtre de "Ajouter par artiste". Pas de flux réactif : la feuille se ferme
+/// dès qu'un artiste est ajouté.
+final artistsForPlaylistProvider =
+    FutureProvider.autoDispose.family<List<PlaylistArtistCandidate>, String>((ref, playlistId) {
+  return ref.watch(artistRepositoryProvider).fetchArtistsForPlaylist(playlistId);
 });
 
 /// Carrousel "Suggestions d'artistes" de Découverte (Section 5.2) — remplace
