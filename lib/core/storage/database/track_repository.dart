@@ -140,6 +140,33 @@ class TrackRepository {
     return row != null;
   }
 
+  /// Chemin, empreinte SHA-256 (souvent nulle) et mtime mémorisé de chaque
+  /// fichier de la bibliothèque, en une seule requête sans les autres colonnes
+  /// — le recensement des fichiers ajoutables (ImportableAudioFinder) compare
+  /// des milliers de fichiers du téléphone à la bibliothèque, une requête par
+  /// fichier serait trop lente.
+  Future<List<({String filePath, String? fileHash, int lastModifiedEpochMs})>> fetchFileRefs() async {
+    final JoinedSelectStatement<$TracksTable, Track> query = _db.selectOnly(_db.tracks)
+      ..addColumns([_db.tracks.filePath, _db.tracks.fileHash, _db.tracks.lastModifiedEpochMs]);
+    final List<TypedResult> rows = await query.get();
+    return [
+      for (final TypedResult row in rows)
+        (
+          filePath: row.read(_db.tracks.filePath)!,
+          fileHash: row.read(_db.tracks.fileHash),
+          lastModifiedEpochMs: row.read(_db.tracks.lastModifiedEpochMs) ?? 0,
+        ),
+    ];
+  }
+
+  /// Chemins de tous les fichiers en liste noire, en une requête (version en
+  /// bloc de [isBlacklisted] côté chemin ; la clé `trackKey`, qui demande de
+  /// lire les tags du fichier, n'est pas couverte).
+  Future<Set<String>> blacklistedFilePaths() async {
+    final List<BlacklistedTrack> rows = await _db.select(_db.blacklistedTracks).get();
+    return {for (final BlacklistedTrack row in rows) row.filePath};
+  }
+
   /// Retire des morceaux de Vibe : ligne `tracks`, index d'artistes et
   /// liaisons de playlists — sans quoi un morceau retiré laisserait une ligne
   /// fantôme dans "Tous les titres importés" (masquée par les jointures

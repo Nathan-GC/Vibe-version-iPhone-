@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/platform/app_platform.dart';
+import '../../../core/shared/permission_retry.dart';
 import '../../../core/shared/widgets/blacklisted_import_dialog.dart';
 import '../../../core/shared/widgets/enrichment_source_dialog.dart';
 import '../../../core/shared/widgets/library_category_picker.dart';
@@ -27,6 +28,7 @@ import '../../settings/data/auto_enrich_preference.dart';
 import '../data/documents_sync_controller.dart';
 import '../data/library_enrichment_runner.dart';
 import '../data/library_providers.dart';
+import 'import/importable_audio_screen.dart';
 import 'library_rescan_banner.dart';
 import 'metadata_editor_modal.dart';
 
@@ -61,10 +63,43 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     if (ref.read(enrichAllRequestProvider.notifier).consume()) unawaited(_enrichLibrary());
   }
 
+  /// « Importer des MP3 » : choisir les fichiers, puis les importer.
   Future<void> _importFiles() async {
-    final List<PlatformFile> picked = await FilePicker.pickFiles(type: FileType.audio);
-    if (picked.isEmpty) return;
+    final List<String?> paths = await _chooseFiles();
+    if (paths.isEmpty || !mounted) return;
+    await _importPaths(paths);
+  }
 
+  /// Écran de l'app listant les fichiers audio du téléphone pas encore en
+  /// bibliothèque ; le sélecteur système si l'autorisation audio est refusée
+  /// ou si l'utilisateur choisit « Parcourir les dossiers… ». Liste vide =
+  /// rien à importer.
+  Future<List<String?>> _chooseFiles() async {
+    // iOS : aucune app ne peut lister les fichiers audio du téléphone — le
+    // sélecteur de l'app Fichiers reste le seul accès (Android : inchangé).
+    if (AppPlatform.isIOS) return _pickWithSystemPicker();
+    // Sans autorisation le recensement ne verrait rien (Android 12 et moins :
+    // READ_EXTERNAL_STORAGE, voir requestAudioFilesAccess).
+    if (!await requestAudioFilesAccess() || !mounted) return _pickWithSystemPicker();
+
+    final ImportableAudioResult? result = await Navigator.of(context).push<ImportableAudioResult>(
+      MaterialPageRoute(builder: (context) => const ImportableAudioScreen()),
+    );
+    return switch (result) {
+      ImportableAudioPicked(:final paths) => paths,
+      ImportableAudioBrowse() => await _pickWithSystemPicker(),
+      null => const [],
+    };
+  }
+
+  Future<List<String?>> _pickWithSystemPicker() async {
+    final List<PlatformFile> picked = await FilePicker.pickFiles(type: FileType.audio);
+    return [for (final PlatformFile file in picked) file.path];
+  }
+
+  /// Boucle d'import commune à l'écran et au sélecteur système. Un chemin
+  /// `null` (le sélecteur n'en donne pas toujours) compte comme un échec.
+  Future<void> _importPaths(List<String?> picked) async {
     setState(() {
       _busy = true;
       _statusMessage = 'Import 0 / ${picked.length}...';
@@ -93,7 +128,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       final List<ScannedTrack> renamedTracks = [];
 
       for (int i = 0; i < picked.length; i++) {
-        final String? path = picked[i].path;
+        final String? path = picked[i];
         if (path != null) {
           try {
             // Copie privée supprimée d'office si le fichier est refusé
