@@ -8,9 +8,11 @@ import 'package:playlist_app/core/playlist_manifest/playlist_manifest.dart';
 import 'package:playlist_app/core/storage/database/app_database.dart';
 import 'package:playlist_app/core/storage/database/track_repository.dart';
 import 'package:playlist_app/core/storage/scanner/scanned_track.dart';
+import 'package:playlist_app/core/theme/vibe_engine/vibe_engine.dart';
 import 'package:playlist_app/features/diff/domain/diff_result.dart';
 import 'package:playlist_app/features/playlists/data/drift_playlist_repository.dart';
 import 'package:playlist_app/features/playlists/data/playlist_manifest_service.dart';
+import 'package:playlist_app/features/playlists/data/playlist_repository.dart';
 import 'package:playlist_app/features/playlists/domain/import_match_plan.dart';
 import 'package:playlist_app/features/playlists/domain/playlist_editor_entry.dart';
 
@@ -168,5 +170,78 @@ void main() {
     await playlists.deletePlaylist(imported.id);
 
     expect(await db.select(db.playlistMissingTracks).get(), isEmpty);
+  });
+
+  group('re-importing an exported playlist updates it instead of copying it', () {
+    Future<PlaylistManifest> reexportEnriched(String playlistId) async {
+      final PlaylistManifest exported = await service.buildManifest(playlistId, author: 'Moi');
+      // Enrichi hors de l'app : un titre ajouté, ordre inversé, version + 1.
+      return PlaylistManifest(
+        id: exported.id,
+        title: exported.title,
+        description: exported.description,
+        version: exported.version + 1,
+        tags: exported.tags,
+        vibeStyle: exported.vibeStyle,
+        creatorHandle: exported.creatorHandle,
+        originalCreator: exported.originalCreator,
+        tracks: [
+          const ManifestTrackRef(title: 'Teardrop', artist: 'Massive Attack'),
+          ...exported.tracks.reversed,
+        ],
+      );
+    }
+
+    test('a fork (id "<source>-fork-<ts>") is found by its own id and updated in place', () async {
+      await addTrack('Digital Love', 'Daft Punk');
+      await addTrack('Intro', 'The xx');
+      await addTrack('Teardrop', 'Massive Attack');
+      final Playlist fork = await importManifest();
+      final int playlistCountBefore = (await db.select(db.playlists).get()).length;
+
+      final PlaylistManifest enriched = await reexportEnriched(fork.id);
+      expect(enriched.id, fork.id);
+
+      final Playlist? target = await playlists.findImportTarget(enriched.id);
+      expect(target?.id, fork.id);
+
+      final ImportMatchPlan plan = await service.planImport(enriched.tracks);
+      final Playlist updated = await service.applyUpdate(target!.id, enriched, plan.autoResolution);
+
+      expect((await db.select(db.playlists).get()).length, playlistCountBefore);
+      expect(updated.version, fork.version + 1);
+      final List<PlaylistEditorEntry> entries = await playlists.watchEditorEntries(fork.id).first;
+      expect(entries.map((e) => e.title), ['Teardrop', 'Intro', 'Midnight City', 'Digital Love']);
+      expect(entries.map((e) => e.isMissing), [false, false, true, false]);
+    });
+
+    test('a playlist created in the app (id "local-<ts>") is found by its own id', () async {
+      final Playlist local = await playlists.createEmpty(title: 'Ma playlist', vibeStyle: VibePreset.minimal);
+
+      expect((await playlists.findImportTarget(local.id))?.id, local.id);
+    });
+
+    test('the source manifest id still finds the fork, even when the source was forked twice', () async {
+      await importManifest();
+      await importManifest();
+
+      final Playlist? target = await playlists.findImportTarget(manifest.id);
+      expect(target?.sourceManifestId, manifest.id);
+    });
+
+    test('an unknown manifest id finds nothing (new import)', () async {
+      await importManifest();
+
+      expect(await playlists.findImportTarget('someone-else-mix'), isNull);
+    });
+
+    test('an export of an automatic playlist never overwrites it', () async {
+      await db.into(db.playlists).insertOnConflictUpdate(
+            PlaylistsCompanion.insert(id: kLikedPlaylistId, title: 'Titres likés'),
+          );
+
+      expect(await playlists.findImportTarget(kLikedPlaylistId), isNull);
+      expect(await playlists.findImportTarget(kAllImportedPlaylistId), isNull);
+    });
   });
 }

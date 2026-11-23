@@ -26,11 +26,20 @@ abstract class PlaylistRepository {
 
   Stream<Playlist?> watchPlaylist(String playlistId);
 
-  /// Retrouve une playlist locale déjà forkée depuis ce `manifest.id` — permet
-  /// de distinguer une mise à jour (diff) d'un tout nouvel import, alors que
-  /// `Playlist.id` local est lui suffixé `-fork-<timestamp>` et ne correspond
-  /// jamais directement au `manifest.id` entrant.
-  Future<Playlist?> findBySourceManifestId(String manifestId);
+  /// Playlist locale à mettre à jour quand un manifeste d'id `manifestId` est
+  /// importé — `null` : nouvel import. Permet de distinguer une mise à jour
+  /// (diff) d'un tout nouvel import, dans les deux cas réels :
+  ///  1. le manifeste est l'export d'une playlist de cet appareil (créée ici
+  ///     `local-<ts>`, ou elle-même un fork `<source>-fork-<ts>`), puis
+  ///     enrichi hors de l'app : son `id` est celui de la playlist locale ;
+  ///  2. le manifeste vient de l'auteur d'origine : son `id` est la
+  ///     `sourceManifestId` du fork local (dont l'id est suffixé
+  ///     `-fork-<timestamp>` et ne correspond jamais au `manifest.id`).
+  /// Le cas 1 prime. Les playlists automatiques ("Titres likés", "Tous les
+  /// titres importés") ne sont jamais écrasées par un import : leur export
+  /// réimporté reste une copie. Si la source a été forkée plusieurs fois, le
+  /// fork le plus récent est retenu.
+  Future<Playlist?> findImportTarget(String manifestId);
 
   /// Toutes les lignes de la playlist dans l'ordre d'affichage : morceaux de
   /// la bibliothèque ET titres importés introuvables (grisés, voir

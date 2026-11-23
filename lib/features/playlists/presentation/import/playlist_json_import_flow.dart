@@ -19,8 +19,10 @@ import 'import_matching_screen.dart';
 /// Parcours complet d'import d'une playlist JSON, partagé par l'écran Import
 /// (Découverte) et le bouton "+" de Mon espace :
 ///  1. lecture/validation du fichier ;
-///  2. nouvelle playlist, ou mise à jour d'une playlist déjà importée depuis
-///     ce même manifeste (aperçu des différences puis confirmation) ;
+///  2. nouvelle playlist, ou mise à jour de la playlist que ce manifeste
+///     désigne — exportée de cet appareil, ou déjà importée depuis ce même
+///     manifeste (voir PlaylistRepository.findImportTarget) — avec aperçu
+///     des différences puis confirmation ;
 ///  3. matching automatique, puis fenêtre de matching manuel si besoin ;
 ///  4. enregistrement : la playlist apparaît dans "Tes playlists"
 ///     (Découverte ET Mon espace), titres non associés grisés.
@@ -53,7 +55,7 @@ class PlaylistJsonImportFlow {
     final PlaylistRepository playlists = ref.read(playlistRepositoryProvider);
     final PlaylistManifestService service = ref.read(playlistManifestServiceProvider);
 
-    final Playlist? existing = await playlists.findBySourceManifestId(manifest.id);
+    final Playlist? existing = await playlists.findImportTarget(manifest.id);
     if (existing != null) {
       if (!context.mounted) return;
       await _updateExisting(context, messenger, service, existing, manifest);

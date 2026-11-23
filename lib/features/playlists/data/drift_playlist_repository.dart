@@ -46,8 +46,19 @@ class DriftPlaylistRepository implements PlaylistRepository {
   }
 
   @override
-  Future<Playlist?> findBySourceManifestId(String manifestId) {
-    return (_db.select(_db.playlists)..where((p) => p.sourceManifestId.equals(manifestId))).getSingleOrNull();
+  Future<Playlist?> findImportTarget(String manifestId) async {
+    if (manifestId != kLikedPlaylistId && manifestId != kAllImportedPlaylistId) {
+      final Playlist? own =
+          await (_db.select(_db.playlists)..where((p) => p.id.equals(manifestId))).getSingleOrNull();
+      if (own != null) return own;
+    }
+    // Plusieurs forks d'une même source sont possibles : `getSingleOrNull`
+    // levait une exception, on prend le plus récent.
+    return (_db.select(_db.playlists)
+          ..where((p) => p.sourceManifestId.equals(manifestId))
+          ..orderBy([(p) => OrderingTerm.desc(p.createdAt), (p) => OrderingTerm.desc(p.id)])
+          ..limit(1))
+        .getSingleOrNull();
   }
 
   @override
