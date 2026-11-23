@@ -95,12 +95,13 @@ class PlaylistJsonImportFlow {
     Playlist existing,
     PlaylistManifest manifest,
   ) async {
-    if (existing.version == manifest.version) {
+    final DiffResult diff = await service.computeDiff(existing.id, manifest);
+    // Un outil d'enrichissement externe peut changer les titres ou leur ordre
+    // sans incrémenter `version` : la version seule ne suffit pas.
+    if (existing.version == manifest.version && !diff.contentChanged) {
       messenger.showSnackBar(SnackBar(content: Text('« ${existing.title} » est déjà à jour.')));
       return;
     }
-
-    final DiffResult diff = await service.computeDiff(existing.id, manifest);
     if (!context.mounted) return;
     bool accepted = false;
     await showDialog<void>(

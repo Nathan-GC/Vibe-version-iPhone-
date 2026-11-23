@@ -113,6 +113,14 @@ class PlaylistManifestService {
     };
     final Map<String, ManifestTrackRef> incomingByKey = {for (final t in incoming.tracks) keyOf(t): t};
 
+    // Les clés des maps sont déjà dédoublonnées en gardant la 1re position :
+    // `_writeEntries` ne réinsère pas un doublon, le comparer au manifeste
+    // brut proposerait une mise à jour à chaque réimport.
+    final List<String> localKeys = localByKey.keys.toList();
+    final List<String> incomingKeys = incomingByKey.keys.toList();
+    final List<String> commonLocal = localKeys.where(incomingByKey.containsKey).toList();
+    final List<String> commonIncoming = incomingKeys.where(localByKey.containsKey).toList();
+
     return DiffResult(
       localVersion: local.version,
       incomingVersion: incoming.version,
@@ -124,7 +132,17 @@ class PlaylistManifestService {
         for (final e in localByKey.entries)
           if (!incomingByKey.containsKey(e.key)) e.value,
       ],
+      contentChanged: !_sameKeys(localKeys, incomingKeys),
+      orderChanged: !_sameKeys(commonLocal, commonIncoming),
     );
+  }
+
+  static bool _sameKeys(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   /// Écrit un titre par position `i` du manifeste : morceau local si

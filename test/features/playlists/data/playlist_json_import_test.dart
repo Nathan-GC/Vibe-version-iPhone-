@@ -172,6 +172,98 @@ void main() {
     expect(await db.select(db.playlistMissingTracks).get(), isEmpty);
   });
 
+  group('computeDiff : contentChanged / orderChanged (même version)', () {
+    Future<Playlist> forkOfThree() async {
+      await addTrack('Digital Love', 'Daft Punk');
+      await addTrack('Midnight City', 'M83');
+      await addTrack('Intro', 'The xx');
+      return importManifest();
+    }
+
+    PlaylistManifest withTracks(PlaylistManifest base, List<ManifestTrackRef> tracks) => PlaylistManifest(
+          id: base.id,
+          title: base.title,
+          description: base.description,
+          version: base.version,
+          tags: base.tags,
+          vibeStyle: base.vibeStyle,
+          creatorHandle: base.creatorHandle,
+          originalCreator: base.originalCreator,
+          tracks: tracks,
+        );
+
+    test('an export compared with itself has no content change', () async {
+      final Playlist fork = await forkOfThree();
+      final PlaylistManifest exported = await service.buildManifest(fork.id, author: 'Moi');
+
+      final DiffResult diff = await service.computeDiff(fork.id, exported);
+
+      expect(diff.contentChanged, isFalse);
+      expect(diff.orderChanged, isFalse);
+    });
+
+    test('same version, reversed order only: contentChanged without added or removed', () async {
+      final Playlist fork = await forkOfThree();
+      final PlaylistManifest exported = await service.buildManifest(fork.id, author: 'Moi');
+
+      final DiffResult diff =
+          await service.computeDiff(fork.id, withTracks(exported, exported.tracks.reversed.toList()));
+
+      expect(diff.contentChanged, isTrue);
+      expect(diff.orderChanged, isTrue);
+      expect(diff.added, isEmpty);
+      expect(diff.removed, isEmpty);
+      expect(diff.hasChanges, isFalse);
+    });
+
+    test('same version, one added title: contentChanged, order unchanged', () async {
+      final Playlist fork = await forkOfThree();
+      final PlaylistManifest exported = await service.buildManifest(fork.id, author: 'Moi');
+
+      final DiffResult diff = await service.computeDiff(
+        fork.id,
+        withTracks(exported, [...exported.tracks, const ManifestTrackRef(title: 'Teardrop', artist: 'Massive Attack')]),
+      );
+
+      expect(diff.contentChanged, isTrue);
+      expect(diff.orderChanged, isFalse);
+      expect(diff.added.map((t) => t.title), ['Teardrop']);
+    });
+
+    test('a duplicate title in the manifest does not count as a change', () async {
+      final Playlist fork = await forkOfThree();
+      final PlaylistManifest exported = await service.buildManifest(fork.id, author: 'Moi');
+
+      final DiffResult diff = await service.computeDiff(
+        fork.id,
+        withTracks(exported, [...exported.tracks, exported.tracks.first]),
+      );
+
+      expect(diff.contentChanged, isFalse);
+    });
+
+    test('an identical greyed title at its place is not a change', () async {
+      await addTrack('Digital Love', 'Daft Punk');
+      await addTrack('Intro', 'The xx');
+      final Playlist fork = await importManifest(); // « Midnight City » grisé
+      final PlaylistManifest exported = await service.buildManifest(fork.id, author: 'Moi');
+
+      final DiffResult diff = await service.computeDiff(fork.id, exported);
+
+      expect(exported.tracks.map((t) => t.title), contains('Midnight City'));
+      expect(diff.contentChanged, isFalse);
+    });
+
+    test('a naming difference already resolved by matching is not a change', () async {
+      await addTrack('Digital Love (feat. DJ Test)', 'Daft Punk');
+      final Playlist fork = await importManifest();
+
+      final DiffResult diff = await service.computeDiff(fork.id, manifest);
+
+      expect(diff.contentChanged, isFalse);
+    });
+  });
+
   group('re-importing an exported playlist updates it instead of copying it', () {
     Future<PlaylistManifest> reexportEnriched(String playlistId) async {
       final PlaylistManifest exported = await service.buildManifest(playlistId, author: 'Moi');

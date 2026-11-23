@@ -8,6 +8,8 @@ class DiffResult {
     required this.incomingVersion,
     required this.added,
     required this.removed,
+    required this.contentChanged,
+    required this.orderChanged,
   });
 
   final int localVersion;
@@ -15,5 +17,14 @@ class DiffResult {
   final List<ManifestTrackRef> added;
   final List<ManifestTrackRef> removed;
 
+  /// La liste ORDONNÉE des titres (clé tolérante, 1re occurrence) diffère
+  /// entre la playlist locale et le manifeste : ajouts, retraits ou nouvel
+  /// ordre. Permet de proposer une mise à jour même à version égale.
+  final bool contentChanged;
+
+  /// L'ordre relatif des titres communs aux deux listes diffère.
+  final bool orderChanged;
+
+  /// Ajouts ou retraits seulement (un simple nouvel ordre n'en fait pas partie).
   bool get hasChanges => added.isNotEmpty || removed.isNotEmpty;
 }

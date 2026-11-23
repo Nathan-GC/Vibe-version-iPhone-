@@ -14,21 +14,34 @@ class DiffModal extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text('Mise à jour disponible (v${diff.localVersion} → v${diff.incomingVersion})'),
+      title: Text(diff.localVersion == diff.incomingVersion
+          ? 'Mise à jour disponible (v${diff.localVersion})'
+          : 'Mise à jour disponible (v${diff.localVersion} → v${diff.incomingVersion})'),
       content: SizedBox(
         width: double.maxFinite,
         child: diff.hasChanges
             ? SingleChildScrollView(
-                child: Row(
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(child: _DiffColumn(title: '+ Ajoutés', color: Colors.green, tracks: diff.added)),
-                    const SizedBox(width: 12),
-                    Expanded(child: _DiffColumn(title: '- Retirés', color: Colors.red, tracks: diff.removed)),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: _DiffColumn(title: '+ Ajoutés', color: Colors.green, tracks: diff.added)),
+                        const SizedBox(width: 12),
+                        Expanded(child: _DiffColumn(title: '- Retirés', color: Colors.red, tracks: diff.removed)),
+                      ],
+                    ),
+                    if (diff.orderChanged) ...[
+                      const SizedBox(height: 12),
+                      const Text("L'ordre des titres change aussi."),
+                    ],
                   ],
                 ),
               )
-            : const Text('Aucun changement de morceaux, seule la version a été mise à jour.'),
+            : diff.contentChanged
+                ? const Text('Mêmes morceaux, dans un nouvel ordre.')
+                : const Text('Aucun changement de morceaux, seule la version a été mise à jour.'),
       ),
       actions: [
         TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Annuler')),
