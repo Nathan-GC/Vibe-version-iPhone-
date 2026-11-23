@@ -1,7 +1,7 @@
 name: playlist_app
 description: Lecteur de musique local-first, entièrement personnalisable.
 publish_to: "none"
-version: 1.6.0+4018
+version: 1.6.1+4019
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
